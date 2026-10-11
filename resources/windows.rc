@@ -1,0 +1,3 @@
+// Numeric ids keep the order stable: index 0 = app icon, 1 = archive icon.
+1 ICON "app.ico"
+2 ICON "archive.ico"

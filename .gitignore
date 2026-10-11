@@ -1,0 +1,10 @@
+/build*/
+/out/
+/.deps/
+/.wix/
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+*.user
+*.pdb
+__pycache__/

@@ -1,0 +1,31 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "msvc-release",
+      "displayName": "Qt 6 / MSVC / CUDA Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT}",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "msvc-release-cpu",
+      "displayName": "Qt 6 / MSVC Release (CPU backend only)",
+      "inherits": "msvc-release",
+      "binaryDir": "${sourceDir}/build-cpu",
+      "cacheVariables": { "VYRA_WITH_CUDA": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "msvc-release" },
+    { "name": "release-cpu", "configurePreset": "msvc-release-cpu" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "msvc-release", "output": { "outputOnFailure": true } },
+    { "name": "release-cpu", "configurePreset": "msvc-release-cpu", "output": { "outputOnFailure": true } }
+  ]
+}
