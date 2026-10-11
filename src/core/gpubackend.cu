@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -38,6 +39,17 @@ void checkNv(nvcompStatus_t code, const char *what)
 }
 
 std::size_t alignUp(std::size_t v, std::size_t a) { return (v + a - 1) / a * a; }
+
+// On Windows (WDDM) cudaSetDevice() waits while another thread sits in
+// cudaStreamSynchronize(), which serialised the two codec streams. Select the
+// device once per thread instead of on every call.
+void useDevice(int device)
+{
+    thread_local int current = -1;
+    if (current == device) return;
+    check(cudaSetDevice(device), "cudaSetDevice");
+    current = device;
+}
 
 template<class T> class DeviceArray {
 public:
@@ -65,6 +77,7 @@ private:
 };
 
 struct DeflateCodec {
+    static constexpr int id = 0;
     using COpts = nvcompBatchedDeflateCompressOpts_t;
     using DOpts = nvcompBatchedDeflateDecompressOpts_t;
     static constexpr std::size_t maxChunk = 65536;
@@ -92,6 +105,7 @@ struct DeflateCodec {
 };
 
 struct Lz4Codec {
+    static constexpr int id = 1;
     using COpts = nvcompBatchedLZ4CompressOpts_t;
     using DOpts = nvcompBatchedLZ4DecompressOpts_t;
     static constexpr std::size_t maxChunk = std::size_t(1) << 24;
@@ -111,6 +125,7 @@ struct Lz4Codec {
 };
 
 struct ZstdCodec {
+    static constexpr int id = 2;
     using COpts = nvcompBatchedZstdCompressOpts_t;
     using DOpts = nvcompBatchedZstdDecompressOpts_t;
     static constexpr std::size_t maxChunk = std::size_t(1) << 24;
@@ -151,7 +166,9 @@ public:
         m_name = prop.name;
         m_memory = prop.totalGlobalMem;
         check(cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking), "cudaStreamCreate");
+        check(cudaEventCreateWithFlags(&m_done, cudaEventBlockingSync | cudaEventDisableTiming), "cudaEventCreate");
         m_profile = std::getenv("VYRA_PROFILE") != nullptr;
+        m_timeline = m_profile && std::string(std::getenv("VYRA_PROFILE")) == "2";
         for (auto &e : m_events) check(cudaEventCreate(&e), "cudaEventCreate");
     }
     ~GpuBackend() override
@@ -161,6 +178,7 @@ public:
             std::fprintf(stderr, "[gpu] %d calls: upload %.2fs compress %.2fs pack+download %.2fs host-sync %.2fs\n", m_profileCalls,
                          m_profileMs[0] / 1000, m_profileMs[1] / 1000, m_profileMs[2] / 1000, m_profileMs[3] / 1000);
         for (auto &e : m_events) if (e) cudaEventDestroy(e);
+        if (m_done) cudaEventDestroy(m_done);
         // Release pinned staging while m_pinned is still alive.
         m_staging.release();
         if (m_stream) {
@@ -231,6 +249,15 @@ public:
     }
 
 private:
+    // Waits for the stream without holding the runtime lock that
+    // cudaStreamSynchronize keeps on WDDM: a blocking-sync event lets the
+    // other codec thread keep issuing work meanwhile.
+    void waitStream(const char *what)
+    {
+        check(cudaEventRecord(m_done, m_stream), what);
+        check(cudaEventSynchronize(m_done), what);
+    }
+
     // Uploads `chunks` of `input` as one contiguous transfer when they are
     // already laid out with the required alignment, otherwise repacks them.
     std::uint8_t *stageInput(const std::uint8_t *input, const std::vector<Span> &chunks, std::size_t alignment,
@@ -281,21 +308,34 @@ private:
         output.offsets.assign(n + 1, 0);
         output.data.clear();
         if (n == 0) return;
-        check(cudaSetDevice(m_device), "cudaSetDevice");
+        const auto hostEntry = std::chrono::steady_clock::now();
+        useDevice(m_device);
+        const auto hostDevice = std::chrono::steady_clock::now();
         const auto opts = Codec::copts(level);
-        nvcompAlignmentRequirements_t align{};
-        checkNv(Codec::calign(opts, &align), "alignment query");
         std::size_t maxChunk = 0, total = 0;
         for (const Span &c : chunks) {
             maxChunk = std::max(maxChunk, c.size);
             total += c.size;
         }
         if (maxChunk > Codec::maxChunk) throw Error("chunk too large for the GPU codec");
-        std::size_t bound = 0;
-        checkNv(Codec::cbound(maxChunk, opts, &bound), "output bound");
+        // nvCOMP's size/alignment queries can synchronise the whole device,
+        // which serialises the two CUDA streams; ask once per configuration
+        // and reuse (temp space computed for more chunks/bytes stays valid).
+        CompressPlan &plan = m_plans[planKey(Codec::id, level, maxChunk)];
+        if (!plan.ready) {
+            checkNv(Codec::calign(opts, &plan.align), "alignment query");
+            checkNv(Codec::cbound(maxChunk, opts, &plan.bound), "output bound");
+            plan.ready = true;
+        }
+        if (n > plan.tempChunks || total > plan.tempTotal) {
+            plan.tempChunks = std::max(n, plan.tempChunks);
+            plan.tempTotal = std::max(total, plan.tempTotal);
+            checkNv(Codec::ctemp(plan.tempChunks, maxChunk, opts, &plan.tempBytes, plan.tempTotal), "temp size");
+        }
+        const nvcompAlignmentRequirements_t align = plan.align;
+        const std::size_t bound = plan.bound;
         const std::size_t stride = alignUp(bound, std::max<std::size_t>(align.output, 256));
-        std::size_t tempBytes = 0;
-        checkNv(Codec::ctemp(n, maxChunk, opts, &tempBytes, total), "temp size");
+        const std::size_t tempBytes = plan.tempBytes;
 
         std::vector<std::size_t> inOffsets;
         const auto hostStart = std::chrono::steady_clock::now();
@@ -329,7 +369,8 @@ private:
         m_hostStatuses.resize(n);
         check(cudaMemcpyAsync(m_hostSizes.data() + n, dSizes + n, n * sizeof(std::size_t), cudaMemcpyDeviceToHost, m_stream), "download sizes");
         check(cudaMemcpyAsync(m_hostStatuses.data(), m_statuses.get(), n * sizeof(nvcompStatus_t), cudaMemcpyDeviceToHost, m_stream), "download statuses");
-        check(cudaStreamSynchronize(m_stream), "compress");
+        waitStream("compress");
+        const auto hostSized = std::chrono::steady_clock::now();
         for (std::size_t i = 0; i < n; ++i) {
             if (m_hostStatuses[i] != nvcompSuccess || m_hostSizes[n + i] > bound)
                 throw Error("nvCOMP compression failed for a chunk (status " + std::to_string(int(m_hostStatuses[i])) + ")");
@@ -348,7 +389,13 @@ private:
         output.data.resize(packedBytes); // pinned when the caller set this backend as allocator
         check(cudaMemcpyAsync(output.data.data(), m_packed.get(), packedBytes, cudaMemcpyDeviceToHost, m_stream), "download");
         if (m_profile) cudaEventRecord(m_events[3], m_stream);
-        check(cudaStreamSynchronize(m_stream), "download");
+        waitStream("download");
+        if (m_timeline) {
+            static const auto epoch = std::chrono::steady_clock::now();
+            auto ms = [](std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(t - epoch).count(); };
+            std::fprintf(stderr, "[gpu-tl] %p entry %8.1f device %8.1f start %8.1f sized %8.1f done %8.1f\n", static_cast<void *>(this),
+                         ms(hostEntry), ms(hostDevice), ms(hostStart), ms(hostSized), ms(std::chrono::steady_clock::now()));
+        }
         if (m_profile) {
             float ms[3] = {};
             cudaEventElapsedTime(&ms[0], m_events[0], m_events[1]);
@@ -368,7 +415,7 @@ private:
         const std::size_t n = chunks.size();
         actualSizes.assign(n, 0);
         if (n == 0) return;
-        check(cudaSetDevice(m_device), "cudaSetDevice");
+        useDevice(m_device);
         const auto opts = Codec::dopts();
         nvcompAlignmentRequirements_t align{};
         checkNv(Codec::dalign(opts, &align), "alignment query");
@@ -425,7 +472,7 @@ private:
                 check(cudaMemcpyAsync(output + outputs[i].offset, m_output.get() + slot[i], outputs[i].size,
                                       cudaMemcpyDeviceToHost, m_stream), "download");
         }
-        check(cudaStreamSynchronize(m_stream), "decompress");
+        waitStream("decompress");
         for (std::size_t i = 0; i < n; ++i) {
             if (m_hostStatuses[i] != nvcompSuccess || m_hostSizes[2 * n + i] > outputs[i].size)
                 throw Error("corrupt data: GPU decompression failed (status " + std::to_string(int(m_hostStatuses[i])) + ")");
@@ -437,6 +484,7 @@ private:
     std::string m_name;
     std::size_t m_memory = 0;
     cudaStream_t m_stream = nullptr;
+    cudaEvent_t m_done = nullptr;
     DeviceArray<std::uint8_t> m_input, m_output, m_packed, m_temp;
     DeviceArray<void *> m_ptrs;
     DeviceArray<std::size_t> m_sizes;
@@ -447,7 +495,19 @@ private:
     HostBuffer m_staging;
     std::mutex m_pinnedMutex;
     std::vector<void *> m_pinned;
+    struct CompressPlan {
+        bool ready = false;
+        nvcompAlignmentRequirements_t align{};
+        std::size_t bound = 0;
+        std::size_t tempChunks = 0, tempTotal = 0, tempBytes = 0;
+    };
+    static std::uint64_t planKey(int codec, int level, std::size_t maxChunk)
+    {
+        return (std::uint64_t(codec) << 56) | (std::uint64_t(level & 0xFF) << 48) | std::uint64_t(maxChunk);
+    }
+    std::map<std::uint64_t, CompressPlan> m_plans;
     bool m_profile = false;
+    bool m_timeline = false;
     cudaEvent_t m_events[4] = {};
     double m_profileMs[4] = {};
     int m_profileCalls = 0;

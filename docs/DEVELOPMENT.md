@@ -31,9 +31,16 @@ virtual void *allocateHost(size_t);  // GPU 백엔드는 pinned 메모리
 
 1. **스캔**: 입력 경로를 순회해 항목 목록과 전체 크기를 만듭니다. 출력 파일 자신은 건너뜁니다.
 2. **스트림 배정**: zip은 비어 있지 않은 파일마다 스트림 하나, 7z는 솔리드 블록 크기까지 파일을 모아 폴더 하나.
-3. **리더 스레드**: 128 MiB 배치 버퍼(pinned)에 파일 조각을 배치하고 청크(기본 64 KiB)를 자릅니다. 읽기 자체는 배치를 넘길 때 I/O 풀(8스레드)에서 병렬로 수행합니다. `FILE_FLAG_SEQUENTIAL_SCAN`은 파일 캐시를 버리게 만들어 쓰지 않습니다.
-4. **코덱 워커**: GPU는 CUDA 스트림 2개(워커 2개)로 배치를 겹쳐 처리하고, 동시에 CPU에서 CRC32를 계산합니다. 이후 Deflate 결합 또는 LZ4 프레이밍.
-5. **라이터**: 배치 순서를 복원(sequence 번호)해 zip 로컬 헤더/데이터 또는 7z 팩 스트림을 기록하고, 끝에 중앙 디렉터리 / 7z 헤더를 씁니다. 임시 파일 `*.vyra-partial`에 쓴 뒤 이름을 바꾸므로 실패·취소 시 기존 파일이 손상되지 않습니다.
+3. **리더 스레드**: 256 MiB 배치 버퍼(pinned)에 파일 조각을 배치하고 청크(기본 64 KiB)를 자릅니다. 읽기 자체는 배치를 넘길 때 I/O 풀(8스레드)에서 병렬로 수행합니다. `FILE_FLAG_SEQUENTIAL_SCAN`은 파일 캐시를 버리게 만들어 쓰지 않습니다.
+4. **코덱 워커**: 배치를 GPU(또는 CPU 풀)로 압축하고, 동시에 CPU에서 CRC32를 계산합니다.
+5. **후처리 단계**: Deflate 결합 또는 LZ4 프레이밍을 별도 스레드에서 수행해, 그동안 GPU는 다음 배치를 압축합니다.
+6. **라이터**: 배치 순서를 복원(sequence 번호)해 zip 로컬 헤더/데이터 또는 7z 팩 스트림을 기록하고, 끝에 중앙 디렉터리 / 7z 헤더를 씁니다. 임시 파일 `*.vyra-partial`에 쓴 뒤 이름을 바꾸므로 실패·취소 시 기존 파일이 손상되지 않습니다.
+
+GPU 관련 실측 메모 (Windows, GeForce = WDDM 드라이버):
+
+- `cudaSetDevice()`가 다른 스레드의 `cudaStreamSynchronize()`가 끝날 때까지 대기합니다. 그래서 장치 선택은 스레드당 한 번만 하고(`useDevice`), 대기는 blocking-sync 이벤트로 합니다(`waitStream`).
+- nvCOMP의 크기/정렬 질의는 구성별로 한 번만 호출해 캐시합니다.
+- CUDA 스트림 2개로 배치를 겹치거나, 복사 스트림과 연산 스트림을 나눠 업로드를 겹치는 방식은 WDDM에서 커널끼리 경합해 오히려 느려져서 쓰지 않습니다. 배치를 크게(기본 256 MiB) 잡아 고정 비용을 줄입니다.
 
 버퍼(`ByteBuffer`, `HostBuffer`)와 배치 객체는 재사용하며 0으로 채우지 않습니다. 수백 MiB 단위에서는 초기화와 페이지 폴트가 눈에 띄게 느리기 때문입니다.
 
@@ -77,7 +84,7 @@ nvCOMP의 청크는 각각 완결된 raw Deflate 스트림입니다. ZIP 항목�
 
 ## 진단 도구
 
-- `VYRA_PROFILE=1`: 단계별 시간(읽기/CRC/압축/후처리/기록)과 GPU 업로드/커널/다운로드 시간을 stderr에 출력
+- `VYRA_PROFILE=1`: 단계별 시간(읽기/CRC/압축/후처리/기록)과 GPU 업로드/커널/다운로드 시간을 stderr에 출력. `VYRA_PROFILE=2`는 GPU 호출별 타임라인도 출력
 - `vyra-cli bench <경로>`: 파일 캐시에서 읽고 출력은 버려 파이프라인만 측정 (AUTO/GPU/CPU)
 - `vyra_backend_bench <파일> [스레드] [MiB]`: I/O 없이 백엔드만 측정
 - `VYRA_SCREENSHOT=<폴더>`: 메인 창과 압축 대화상자를 PNG로 저장하고 종료. `-platform offscreen`과 `QT_QPA_FONTDIR=C:\Windows\Fonts`를 함께 쓰면 화면에 창을 띄우지 않습니다 (`platforms\qoffscreen.dll` 필요).

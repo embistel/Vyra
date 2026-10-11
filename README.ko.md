@@ -27,7 +27,7 @@
 ## 동작 원리
 
 ```text
-파일 읽기(병렬 I/O) ─▶ 128 MiB 배치 ─▶ GPU: 업로드 → nvCOMP 청크 압축 → GPU에서 패킹 → 다운로드 ─▶ 순서대로 기록
+파일 읽기(병렬 I/O) ─▶ 256 MiB 배치 ─▶ GPU: 업로드 → nvCOMP 청크 압축 → GPU에서 패킹 → 다운로드 ─▶ 순서대로 기록
                                        └ CPU: 청크별 CRC32 (동시에)
 ```
 
@@ -44,12 +44,12 @@
 
 | 방식 (수준 1) | GPU (nvCOMP) | CPU 32스레드 | CPU 8스레드 | 압축 후 크기 GPU / CPU |
 |---|---|---|---|---|
-| 7z LZ4 | 1.74 GiB/s | 2.13 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
-| 7z Zstd | 1.71 GiB/s | 2.39 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
-| zip Deflate | 1.66 GiB/s | 2.00 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
+| 7z LZ4 | 1.7–1.8 GiB/s | 2.0–2.1 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
+| 7z Zstd | 1.6–1.7 GiB/s | 2.2–2.4 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
+| zip Deflate | 1.5–1.8 GiB/s | 1.9–2.0 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
 
 - 실제 파일로 쓰는 경우에는 이 PC의 SSD 쓰기 속도(약 0.7–1 GiB/s)가 먼저 한계에 닿습니다.
-- 솔직한 현황: 이 PC처럼 코어가 많은 CPU에서는 1차 버전의 GPU 경로가 **8스레드 CPU와 비슷하고 32스레드 CPU보다 약간 느립니다**. GPU만 단독 측정하면 LZ4 3.0 GiB/s 수준이며, 차이는 PCIe 3.0 전송과 배치 사이 동기화 때문입니다(아래 로드맵 참고). GPU 경로는 CPU 사용량이 매우 적다는 장점이 있습니다.
+- 솔직한 현황: 이 PC처럼 코어가 많은 CPU에서는 1차 버전의 GPU 경로가 **8스레드 CPU와 비슷하고 32스레드 CPU보다 약간 느립니다**. GPU 백엔드만 단독 측정하면 LZ4 3.4 GiB/s(256 MiB 배치)까지 나오지만, 파이프라인 안에서는 파일 읽기·CRC와 메모리/PCIe 3.0 대역을 나눠 쓰면서 낮아집니다(아래 로드맵 참고). GPU 경로는 CPU 사용량이 매우 적다는 장점이 있습니다.
 - Zstd는 GPU가 수준과 무관하게 일정한 속도를 냅니다. 비슷한 압축률을 CPU로 내면(수준 4 → zstd 12) 0.41 GiB/s로, **GPU가 약 4배 빠릅니다**.
 - nvCOMP의 고압축 Deflate(수준 3 이상)는 CPU(zlib-ng)보다 느려서, *자동* 엔진은 이 경우 CPU를 사용합니다.
 
@@ -70,7 +70,7 @@ vyra-cli l backup.7z                             # 목록
 vyra-cli info                                    # GPU 상태
 vyra-cli bench D:\Data                           # 디스크 제외 처리량 측정
 ```
-옵션: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 128m`, `--solid 4g|off`, `-t <스레드>`, `--keep`(기존 파일 유지).
+옵션: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 256m`, `--solid 4g|off`, `-t <스레드>`, `--keep`(기존 파일 유지).
 
 ## 빌드
 

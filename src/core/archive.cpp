@@ -256,6 +256,7 @@ struct Batch {
         output.offsets.clear();
     }
     std::uint64_t sequence = 0;
+    DeflateShape shape = DeflateShape::SyncFlushed;
     int buffer = -1;
     std::uint8_t *data = nullptr;
     std::size_t used = 0;
@@ -375,15 +376,11 @@ private:
         } else {
             m_backend = createCpuBackend(m_pool);
         }
-        // Codec workers pull batches from one queue and the writer restores
-        // the order. On the GPU two workers (two CUDA streams) let one batch
-        // transfer and post-process while the other compresses.
+        // One codec worker per backend. (Two CUDA streams were tried: on WDDM
+        // they contend inside the GPU and lose throughput.) Post-processing
+        // runs in its own stage so the GPU never waits for the CPU.
         m_codecs = {m_backend.get()};
         const std::string engine = method == Method::Store ? "Store (no compression)" : m_backend->info().name;
-        if (m_backend->info().gpu) {
-            m_secondBackend = createGpuBackend(m_options.gpuDevice);
-            if (m_secondBackend) m_codecs.push_back(m_secondBackend.get());
-        }
         {
             std::lock_guard<std::mutex> lock(m_state.mutex);
             m_state.backend = engine;
@@ -435,6 +432,7 @@ private:
         }
         m_state.cancel = true;
         m_readQueue.close();
+        m_postQueue.close();
         m_writeQueue.close();
         m_freeBuffers.close();
         m_freeBatches.close();
@@ -444,7 +442,7 @@ private:
     {
         // Input buffers are recycled as soon as a batch is encoded; batch
         // objects (holding the encoded output) once the writer is done.
-        const int kBuffers = int(m_codecs.size()) + 2, kBatches = kBuffers + 3;
+        const int kBuffers = int(m_codecs.size()) + 3, kBatches = kBuffers + 1;
         m_buffers.resize(kBuffers);
         for (int i = 0; i < kBuffers; ++i) {
             m_buffers[i].reset(*m_backend, m_batchSize);
@@ -467,9 +465,13 @@ private:
         for (std::size_t k = 0; k < m_codecs.size(); ++k) {
             codecs.emplace_back([this, k, &codecsRunning] {
                 try { codecLoop(*m_codecs[k]); } catch (...) { fail(std::current_exception()); }
-                if (--codecsRunning == 0) m_writeQueue.close();
+                if (--codecsRunning == 0) m_postQueue.close();
             });
         }
+        std::thread post([this] {
+            try { postLoop(); } catch (...) { fail(std::current_exception()); }
+            m_writeQueue.close();
+        });
         try {
             writerLoop();
         } catch (...) {
@@ -477,6 +479,7 @@ private:
         }
         reader.join();
         for (auto &t : codecs) t.join();
+        post.join();
         m_freeBatches.close();
         while (m_freeBatches.pop()) {}
         m_buffers.clear();
@@ -633,10 +636,23 @@ private:
                 StageTimer::Scope timing{m_tCompress};
                 backend.compress(method, m_options.level, b.data, b.chunks, b.output);
             }
-            StageTimer::Scope postTiming{m_tPost};
-            ChunkOutput &scratch = m_scratch[&backend == m_codecs[0] ? 0 : 1]; // one per worker
-            if (method == Method::Deflate) joinDeflateChunks(b.output, b.streamEnd, backend.deflateShape(), m_pool, scratch);
-            if (method == Method::LZ4) frameLz4(b, lz4BlockMaximum(m_chunkSize), m_pool, scratch);
+            b.shape = backend.deflateShape();
+            if (!m_postQueue.push(std::move(*next))) throw Cancelled();
+        }
+    }
+
+    // Container framing that needs the CPU: Deflate stream joining and LZ4
+    // frames. Runs while the codec already works on the next batch.
+    void postLoop()
+    {
+        const Method method = m_options.method;
+        while (auto next = m_postQueue.pop()) {
+            Batch &b = **next;
+            {
+                StageTimer::Scope postTiming{m_tPost};
+                if (method == Method::Deflate) joinDeflateChunks(b.output, b.streamEnd, b.shape, m_pool, m_scratch);
+                if (method == Method::LZ4) frameLz4(b, lz4BlockMaximum(m_chunkSize), m_pool, m_scratch);
+            }
             m_freeBuffers.push(b.buffer);
             b.data = nullptr;
             if (!m_writeQueue.push(std::move(*next))) throw Cancelled();
@@ -761,12 +777,12 @@ private:
     OutFile m_out;
     std::vector<HostBuffer> m_buffers;
     ThreadPool m_ioPool{std::min(8, defaultThreadCount())};
-    std::vector<Backend *> m_codecs;          // m_backend plus an optional second GPU stream
-    std::unique_ptr<Backend> m_secondBackend;
-    ChunkOutput m_scratch[2];
+    std::vector<Backend *> m_codecs;
+    ChunkOutput m_scratch;
     BlockingQueue<int> m_freeBuffers{8};
     BlockingQueue<std::unique_ptr<Batch>> m_freeBatches{16};
     BlockingQueue<std::unique_ptr<Batch>> m_readQueue{2};
+    BlockingQueue<std::unique_ptr<Batch>> m_postQueue{2};
     BlockingQueue<std::unique_ptr<Batch>> m_writeQueue{2};
     std::mutex m_errorMutex;
     std::exception_ptr m_error;

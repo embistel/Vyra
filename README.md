@@ -27,7 +27,7 @@
 ## How it works
 
 ```text
-parallel file reads ─▶ 128 MiB batches ─▶ GPU: upload → nvCOMP chunk compression → pack on GPU → download ─▶ ordered writer
+parallel file reads ─▶ 256 MiB batches ─▶ GPU: upload → nvCOMP chunk compression → pack on GPU → download ─▶ ordered writer
                                           └ CPU: per-chunk CRC32 (concurrently)
 ```
 
@@ -44,12 +44,12 @@ Data: 4.0 GiB of Qt `.lib` files read from the file cache, output discarded (`vy
 
 | Method (level 1) | GPU (nvCOMP) | CPU 32 threads | CPU 8 threads | Size GPU / CPU |
 |---|---|---|---|---|
-| 7z LZ4 | 1.74 GiB/s | 2.13 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
-| 7z Zstd | 1.71 GiB/s | 2.39 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
-| zip Deflate | 1.66 GiB/s | 2.00 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
+| 7z LZ4 | 1.7–1.8 GiB/s | 2.0–2.1 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
+| 7z Zstd | 1.6–1.7 GiB/s | 2.2–2.4 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
+| zip Deflate | 1.5–1.8 GiB/s | 1.9–2.0 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
 
 - Writing real archives, this PC's SSD (about 0.7–1 GiB/s) is the limit first.
-- Honest status: on a many-core CPU like this one the first GPU pipeline is **on par with 8 CPU threads and a bit slower than 32**. The GPU backend alone reaches about 3.0 GiB/s for LZ4; the gap is PCIe 3.0 transfers and synchronisation between batches (see the roadmap). The GPU path uses very little CPU.
+- Honest status: on a many-core CPU like this one the first GPU pipeline is **on par with 8 CPU threads and a bit slower than 32**. The GPU backend alone reaches 3.4 GiB/s for LZ4 (256 MiB batches); inside the pipeline it shares memory and PCIe 3.0 bandwidth with file reads and CRCs (see the roadmap). The GPU path uses very little CPU.
 - Zstd runs at a constant speed on the GPU. Reaching a similar ratio on the CPU (level 4 → zstd 12) gives 0.41 GiB/s, so **the GPU is about 4× faster** there.
 - nvCOMP's high-ratio Deflate modes (level 3+) are slower than zlib-ng, so the *automatic* engine uses the CPU for them.
 
@@ -70,7 +70,7 @@ vyra-cli l backup.7z                             # list
 vyra-cli info                                    # GPU status
 vyra-cli bench D:\Data                           # throughput without disk writes
 ```
-Options: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 128m`, `--solid 4g|off`, `-t <threads>`, `--keep` (keep existing files).
+Options: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 256m`, `--solid 4g|off`, `-t <threads>`, `--keep` (keep existing files).
 
 ## Build
 

@@ -79,7 +79,7 @@ void usage()
         "  --gpu | --cpu                force backend (default: GPU when available)\n"
         "  --device <n>                 CUDA device index\n"
         "  --chunk <size>               chunk size, e.g. 64k (Deflate max 64k)\n"
-        "  --batch <size>               GPU batch size, e.g. 128m\n"
+        "  --batch <size>               batch size, e.g. 256m\n"
         "  --solid <size|off>           7z solid block size (default 4g)\n"
         "  -t <n>                       CPU threads\n"
         "  -o <dir>                     output folder for x\n"
