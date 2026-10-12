@@ -155,8 +155,6 @@ KO = {
         "<b>%1</b><br><br>형식: %2<br>방식: %3%4<br>파일: %5개 · 폴더: %6개<br>원본 크기: %7<br>압축 크기: %8 (%9%)",
     " (solid)": " (솔리드)",
     "Windows Explorer Integration": "Windows 탐색기 통합",
-    "Explorer integration is installed system-wide by the installer.\nTo change or remove it, use Windows Installed apps.":
-        "탐색기 통합이 설치 프로그램에 의해 시스템 전체에 설치되어 있습니다.\n변경하거나 제거하려면 Windows의 설치된 앱을 사용하세요.",
     "Explorer integration is installed.\n\nYes: refresh it (e.g. after moving Vyra or changing the language)\nNo: remove it":
         "탐색기 통합이 설치되어 있습니다.\n\n예: 다시 등록 (Vyra를 옮겼거나 언어를 바꾼 경우)\n아니요: 제거",
     "Done": "완료",
@@ -165,6 +163,10 @@ KO = {
     "Add Vyra to the Explorer right-click menu for the current user?\n\n• Files and folders: Compress…, Fast compress to .7z, Compress to .zip, Compress each file to .gz / .lz4\n• .7z / .zip / .gz / .lz4 files: Open, Extract Here, Extract to Folder, Test\n\nNo administrator rights are needed. On Windows 11 the entries appear under \"Show more options\".":
         "현재 사용자의 탐색기 오른쪽 클릭 메뉴에 Vyra를 추가할까요?\n\n• 파일·폴더: 압축하기…, 7z로 빠르게 압축, ZIP으로 압축, 각 파일을 .gz / .lz4로 압축\n• .7z / .zip / .gz / .lz4 파일: 열기, 여기에 풀기, 폴더를 만들어 풀기, 테스트\n\n관리자 권한이 필요 없습니다. Windows 11에서는 \"더 많은 옵션 표시\" 아래에 나타납니다.",
     "Explorer integration installed.": "탐색기 통합을 설치했습니다.",
+    "Explorer integration is managed by the Vyra installer, but a per-user menu from a portable copy of Vyra hides it.\n\nRemove the per-user menu so that the installer's menu is used?":
+        "탐색기 통합은 Vyra 설치 프로그램이 관리하지만, 휴대용 Vyra가 만든 사용자별 메뉴가 그것을 가리고 있습니다.\n\n설치 프로그램의 메뉴가 쓰이도록 사용자별 메뉴를 제거할까요?",
+    "Explorer integration is managed by the Vyra installer.\nTo change or remove it, use Windows Installed apps.":
+        "탐색기 통합은 Vyra 설치 프로그램이 관리합니다.\n바꾸거나 제거하려면 Windows의 설치된 앱을 사용하세요.",
     "The language will change after restarting the app. Restart now?": "앱을 다시 시작하면 언어가 바뀝니다. 지금 다시 시작할까요?",
     "<h2>Vyra %1</h2><p>GPU accelerated 7z / zip / gz / lz4 archiver built on NVIDIA nvCOMP.</p><p>Engine: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT License</p>":
         "<h2>Vyra %1</h2><p>NVIDIA nvCOMP 기반 GPU 가속 7z / zip / gz / lz4 압축 프로그램</p><p>엔진: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT 라이선스</p>",

@@ -441,9 +441,19 @@ void MainWindow::configureShell()
 {
     QString error;
     const bool korean = m_koreanAction->isChecked();
-    if (ShellIntegration::isMachineInstalled()) {
-        QMessageBox::information(this, tr("Windows Explorer Integration"),
-            tr("Explorer integration is installed system-wide by the installer.\nTo change or remove it, use Windows Installed apps."));
+    if (ShellIntegration::isInstallerManaged()) {
+        if (ShellIntegration::hasPortableMenu()) {
+            // HKCU wins over HKLM: a portable copy's menu hides the installer's.
+            if (QMessageBox::question(this, tr("Windows Explorer Integration"),
+                    tr("Explorer integration is managed by the Vyra installer, but a per-user menu from a portable copy "
+                       "of Vyra hides it.\n\nRemove the per-user menu so that the installer's menu is used?")) == QMessageBox::Yes) {
+                if (!ShellIntegration::uninstall(&error)) showError(error);
+                else QMessageBox::information(this, tr("Done"), tr("Explorer integration removed."));
+            }
+        } else {
+            QMessageBox::information(this, tr("Windows Explorer Integration"),
+                tr("Explorer integration is managed by the Vyra installer.\nTo change or remove it, use Windows Installed apps."));
+        }
     } else if (ShellIntegration::isInstalled()) {
         const auto choice = QMessageBox::question(this, tr("Windows Explorer Integration"),
             tr("Explorer integration is installed.\n\nYes: refresh it (e.g. after moving Vyra or changing the language)\nNo: remove it"),
@@ -469,7 +479,9 @@ void MainWindow::switchLanguage(const QString &languageCode)
 {
     QSettings settings;
     settings.setValue(QStringLiteral("ui/language"), languageCode);
-    if (ShellIntegration::isInstalled()) ShellIntegration::install(QCoreApplication::applicationFilePath(), languageCode == QStringLiteral("ko"));
+    // The app's own menu follows the app language; an MSI menu follows Windows'.
+    if (ShellIntegration::hasPortableMenu())
+        ShellIntegration::install(QCoreApplication::applicationFilePath(), languageCode == QStringLiteral("ko"));
     const auto choice = QMessageBox::question(this, tr("Language"), tr("The language will change after restarting the app. Restart now?"),
                                               QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (choice == QMessageBox::Yes) {

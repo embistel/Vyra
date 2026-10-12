@@ -79,10 +79,21 @@ Method: every tool compresses the same input from the file cache and writes a re
 
 Vyra's gzip is **43–49×** faster than 7-Zip's; 7-Zip's slower Deflate search packs tighter. Reading them back: `.gz` decodes serially at ~550 MiB/s (gzip has no block index); `.lz4` decodes in parallel at ~2.5 GiB/s and extracts at ~1.4 GiB/s.
 
+## Install
+
+- **Installer, `Vyra-<version>-x64.msi`**:
+  - Double-click installs Vyra for the current user without administrator rights, into `%LOCALAPPDATA%\Programs\Vyra`.
+  - It adds the Start menu entry and the Explorer menus, and you remove it from *Settings ▸ Apps*.
+  - To install for all users, run `msiexec /i Vyra-<version>-x64.msi ALLUSERS=1` from an administrator prompt. That installs into Program Files with menus for every user.
+  - The menu text follows each user's Windows display language: Korean, otherwise English.
+  - The MSI is not code-signed yet, so Windows SmartScreen warns before it runs.
+- **Portable, `Vyra-<version>-win64.zip`**: unzip it anywhere. Add, refresh or remove the Explorer menu from **Tools ▸ Windows Explorer Integration...**.
+- On Windows 11 the menus are under "Show more options".
+
 ## Usage
 
 ### GUI
-Run `Vyra.exe`, drop files/folders or press **Compress**. Drop an archive or press **Open** to browse and extract. Install, refresh or remove the Explorer menu from **Tools ▸ Windows Explorer Integration...** (on Windows 11 it is under "Show more options").
+Run `Vyra.exe`, drop files/folders or press **Compress**. Drop an archive or press **Open** to browse and extract. With the installer, the Explorer menus belong to Windows Installer: the app shows their state but leaves them alone.
 
 ### CLI
 ```powershell
@@ -110,6 +121,7 @@ Requirements: Visual Studio 2022 (C++), CUDA Toolkit 12.x/13.x, Qt 6.5+ (`msvc20
 .\scripts\build.ps1 -Test                        # later builds
 .\scripts\build.ps1 -NoCuda -Test                # CPU-only build, no CUDA needed
 .\scripts\package.ps1                            # out\Vyra-<version>-win64.zip (Qt, nvCOMP, VC runtime)
+.\scripts\build-msi.ps1                          # out\Vyra-<version>-x64.msi (WiX 5.0.2, fetched and SHA-512-checked)
 ```
 
 zlib-ng, LZ4, Zstandard and the LZMA SDK are fetched by CMake and linked statically. `nvcomp64_5.dll` is delay-loaded: without it (or without an NVIDIA driver) Vyra runs in CPU mode.
@@ -120,7 +132,7 @@ Tests: `vyra_tests` (format × method × CPU / GPU / mixed CPU+GPU × batch-size
 
 - GPU engine: keep the CUDA context and buffers alive between jobs (start-up is the GPU's main handicap in one-shot runs); bigger batches without the page-locking cost
 - **Intel / AMD integrated GPU acceleration**: a Vulkan compute or oneAPI/OpenCL backend behind the `Backend` interface
-- MSI installer (WiX, like LMDB Archiver), Windows 11 top-level menu (IExplorerCommand)
+- Code signing for the MSI and executables; Windows 11 top-level menu (IExplorerCommand, needs a signed package)
 - GPU-parallel extraction of Vyra Deflate archives and `.gz` files (chunk index), editing archives (add/delete), AES-256 encryption, split volumes
 - Optional LZ4 content checksum for `.lz4` (needs a sequential xxHash pass)
 

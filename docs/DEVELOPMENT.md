@@ -101,9 +101,38 @@ nvCOMP의 청크는 각각 완결된 raw Deflate 스트림입니다. ZIP 항목�
 - `*\shell\Vyra`, `Directory\shell\Vyra`: `MUIVerb`, `Icon`, `SubCommands=""` + `shell\10compress|20add7z|30addzip|40addgz|50addlz4\command`
 - `SystemFileAssociations\.7z|.zip|.gz|.tgz|.lz4\shell\VyraExtract`: 열기/여기에 풀기/폴더에 풀기/압축 풀기.../테스트
 - `.7z|.zip|.gz|.tgz|.lz4\OpenWithProgids\Vyra.Archive`, `Vyra.Archive`, `Applications\Vyra.exe` ("연결 프로그램" 목록에만 추가, 기본 앱은 바꾸지 않음)
+- 설치 프로그램은 같은 키를 HKMU에 씁니다(아래 "설치 프로그램" 참고). 아래 자동 갱신과 도구 메뉴는 휴대용 사본이 쓴 사용자별 메뉴에만 적용됩니다.
 - `*\shell\Vyra`의 `VyraLayout` 값이 메뉴 구성의 버전입니다(현재 2). 실행한 exe가 등록된 exe와 같고 값이 다르면(이전 버전 설치) 다시 설치합니다. 작업을 맡는 프로세스(GUI, 또는 다중 선택 수집이 끝난 수집자)만 하므로, 다중 선택으로 프로세스가 여러 개 떠도 한 번만 씁니다. 다른 위치의 Vyra(예: 빌드 폴더)는 남의 통합을 바꾸지 않습니다. 동사·형식을 바꾸면 `kLayout`을 올리세요.
 
 정적 동사는 선택한 파일마다 프로세스를 하나씩 띄웁니다. `singleinstance.cpp`의 수집기가 첫 프로세스를 수집자로 정하고(QLockFile) 나머지 경로를 QLocalSocket으로 받은 뒤 600 ms 동안 새 요청이 없으면 하나의 작업으로 실행합니다.
+
+## 설치 프로그램 (MSI)
+
+`scripts/build-msi.ps1`이 `package.ps1`로 파일을 모은 뒤 `installer/Product.wxs`로 `out/Vyra-<버전>-x64.msi`를 만들고 ICE 검증까지 합니다.
+
+- **WiX 5.0.2**: LMDB Archiver와 같은 메이저 버전이고 라이선스는 MS-RL입니다.
+  - nuget.org에서 `build/tools`로 받은 다음, nuget.org 카탈로그의 SHA-512와 비교해서 맞을 때만 씁니다.
+  - .NET SDK는 필요 없습니다. 패키지에 `rollForward: Major`가 있어서 .NET 6 이상 런타임이면 실행됩니다.
+- **설치 범위**: `Scope="perUserOrMachine"`.
+  - 기본은 현재 사용자용입니다(`ALLUSERS=2`, `MSIINSTALLPERUSER=1`). 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Vyra`에 설치됩니다.
+  - `ALLUSERS=1`이면 모든 사용자용으로 Program Files에 설치되고 관리자 권한이 필요합니다.
+  - 레지스트리 루트는 HKMU라서, 사용자용 설치는 HKCU에, 모든 사용자용 설치는 HKLM에 씁니다.
+- **같은 버전 다시 설치**: 다시 빌드해도 버전이 같으므로 `MajorUpgrade AllowSameVersionUpgrades="yes"`로 설치된 것을 교체합니다. 그래서 ICE61 경고는 예상된 것입니다.
+- **메뉴**:
+  - `ShellIntegration::install`과 같은 키와 명령을 쓰고, `VyraLayout=2`와 `VyraInstaller=msi`를 함께 씁니다.
+  - 글자는 간접 문자열 `@Vyra.exe,-<id>`이고, `resources/windows.rc`의 문자열 표(101–105 압축, 110–115 풀기, 120 형식 이름)를 Windows가 사용자 표시 언어로 고릅니다.
+  - 영어 표는 en-US로 둡니다. 언어 중립(neutral)으로 두면 한국어 Windows에서도 항상 영어가 선택되기 때문입니다.
+  - 탐색기는 이 문자열을 캐시(MuiCache)하므로 리소스를 바꾸면 예전 글자가 보일 수 있습니다.
+- **소유권**:
+  - `VyraInstaller=msi`가 있거나 HKLM에 메뉴가 있으면 `ShellIntegration::isInstallerManaged()`가 참입니다.
+  - 이때 앱은 메뉴를 쓰거나 지우지 않습니다. 도구 메뉴, `--install-shell`/`--uninstall-shell`, 언어 변경 시 갱신, 자동 갱신 모두 해당됩니다.
+  - 모든 사용자용 MSI 메뉴를 휴대용 사본의 사용자별 메뉴가 가리는 경우(같은 이름이면 HKCU가 이김)는 도구 메뉴에서 그 사용자별 메뉴만 제거하도록 안내합니다.
+- **시험 방법**: 사용자용 설치는 관리자 권한이 필요 없어 이 PC에서 끝까지 시험했습니다.
+  - `msiexec /i ... /qn`으로 설치하고 파일, 레지스트리, 시작 메뉴, 메뉴 글자 해석을 확인했습니다.
+  - 설치된 exe로 탐색기 명령을 실행했습니다. 다중 선택 동시 실행도 포함합니다.
+  - 같은 버전을 다시 설치해서 제품 등록이 하나만 남는지 확인했습니다.
+  - `msiexec /x ... /qn`으로 제거한 뒤 아무것도 남지 않는지 확인했습니다.
+  - 모든 사용자용 설치(UAC)는 직접 시험해야 합니다.
 
 ## 진단 도구
 

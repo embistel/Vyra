@@ -73,74 +73,81 @@
 <context>
     <name>App</name>
     <message>
-        <location filename="../src/app/app.cpp" line="67"/>
+        <location filename="../src/app/app.cpp" line="76"/>
         <source>Extract %1 to</source>
         <translation>%1 압축 풀 위치</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="83"/>
+        <location filename="../src/app/app.cpp" line="92"/>
         <source>GPU accelerated 7z / zip / gz / lz4 archiver</source>
         <translation>GPU 가속 7z / zip / gz / lz4 압축 프로그램</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="86"/>
+        <location filename="../src/app/app.cpp" line="95"/>
         <source>Archive to open, or paths for a verb</source>
         <translation>열 압축 파일 또는 명령에 전달할 경로</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="90"/>
+        <location filename="../src/app/app.cpp" line="99"/>
         <source>Show the compression dialog for the paths</source>
         <translation>경로에 대한 압축 대화상자 표시</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="91"/>
+        <location filename="../src/app/app.cpp" line="100"/>
         <source>Compress the paths to &lt;name&gt;.7z</source>
         <translation>경로를 &lt;이름&gt;.7z로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="92"/>
+        <location filename="../src/app/app.cpp" line="101"/>
         <source>Compress the paths to &lt;name&gt;.zip</source>
         <translation>경로를 &lt;이름&gt;.zip으로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="93"/>
+        <location filename="../src/app/app.cpp" line="102"/>
         <source>Compress each file to &lt;file&gt;.gz</source>
         <translation>각 파일을 &lt;파일&gt;.gz로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="94"/>
+        <location filename="../src/app/app.cpp" line="103"/>
         <source>Compress each file to &lt;file&gt;.lz4</source>
         <translation>각 파일을 &lt;파일&gt;.lz4로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="95"/>
+        <location filename="../src/app/app.cpp" line="104"/>
         <source>Extract next to the archive</source>
         <translation>압축 파일 옆에 풀기</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="96"/>
+        <location filename="../src/app/app.cpp" line="105"/>
         <source>Extract into a folder named after the archive</source>
         <translation>압축 파일 이름의 폴더에 풀기</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="97"/>
+        <location filename="../src/app/app.cpp" line="106"/>
         <source>Choose where to extract</source>
         <translation>풀 위치 선택</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="98"/>
+        <location filename="../src/app/app.cpp" line="107"/>
         <source>Test archive integrity</source>
         <translation>압축 파일 무결성 검사</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="99"/>
+        <location filename="../src/app/app.cpp" line="108"/>
         <source>Install Windows Explorer integration</source>
         <translation>Windows 탐색기 통합 설치</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="100"/>
+        <location filename="../src/app/app.cpp" line="109"/>
         <source>Remove Windows Explorer integration</source>
         <translation>Windows 탐색기 통합 제거</translation>
+    </message>
+    <message>
+        <location filename="../src/app/app.cpp" line="121"/>
+        <source>Explorer integration is managed by the Vyra installer.
+To change or remove it, use Windows Installed apps.</source>
+        <translation>탐색기 통합은 Vyra 설치 프로그램이 관리합니다.
+바꾸거나 제거하려면 Windows의 설치된 앱을 사용하세요.</translation>
     </message>
 </context>
 <context>
@@ -536,7 +543,7 @@ or drop a .7z / .zip / .gz / .lz4 file to open it.</source>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="141"/>
-        <location filename="../src/app/mainwindow.cpp" line="473"/>
+        <location filename="../src/app/mainwindow.cpp" line="485"/>
         <source>Language</source>
         <translation>언어</translation>
     </message>
@@ -547,7 +554,7 @@ or drop a .7z / .zip / .gz / .lz4 file to open it.</source>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="157"/>
-        <location filename="../src/app/mainwindow.cpp" line="484"/>
+        <location filename="../src/app/mainwindow.cpp" line="496"/>
         <source>About Vyra</source>
         <translation>Vyra 정보</translation>
     </message>
@@ -567,7 +574,23 @@ or drop a .7z / .zip / .gz / .lz4 file to open it.</source>
         <translation>압축 파일 (*.7z *.zip *.gz *.tgz *.lz4);;모든 파일 (*.*)</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="459"/>
+        <location filename="../src/app/mainwindow.cpp" line="448"/>
+        <source>Explorer integration is managed by the Vyra installer, but a per-user menu from a portable copy of Vyra hides it.
+
+Remove the per-user menu so that the installer&apos;s menu is used?</source>
+        <translation>탐색기 통합은 Vyra 설치 프로그램이 관리하지만, 휴대용 Vyra가 만든 사용자별 메뉴가 그것을 가리고 있습니다.
+
+설치 프로그램의 메뉴가 쓰이도록 사용자별 메뉴를 제거할까요?</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="455"/>
+        <source>Explorer integration is managed by the Vyra installer.
+To change or remove it, use Windows Installed apps.</source>
+        <translation>탐색기 통합은 Vyra 설치 프로그램이 관리합니다.
+바꾸거나 제거하려면 Windows의 설치된 앱을 사용하세요.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="469"/>
         <source>Add Vyra to the Explorer right-click menu for the current user?
 
 • Files and folders: Compress…, Fast compress to .7z, Compress to .zip, Compress each file to .gz / .lz4
@@ -582,7 +605,7 @@ No administrator rights are needed. On Windows 11 the entries appear under &quot
 관리자 권한이 필요 없습니다. Windows 11에서는 "더 많은 옵션 표시" 아래에 나타납니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="485"/>
+        <location filename="../src/app/mainwindow.cpp" line="497"/>
         <source>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;GPU accelerated 7z / zip / gz / lz4 archiver built on NVIDIA nvCOMP.&lt;/p&gt;&lt;p&gt;Engine: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT License&lt;/p&gt;</source>
         <translation>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;NVIDIA nvCOMP 기반 GPU 가속 7z / zip / gz / lz4 압축 프로그램&lt;/p&gt;&lt;p&gt;엔진: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT 라이선스&lt;/p&gt;</translation>
     </message>
@@ -694,21 +717,15 @@ No administrator rights are needed. On Windows 11 the entries appear under &quot
         <translation> (솔리드)</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="445"/>
-        <location filename="../src/app/mainwindow.cpp" line="448"/>
+        <location filename="../src/app/mainwindow.cpp" line="447"/>
+        <location filename="../src/app/mainwindow.cpp" line="454"/>
         <location filename="../src/app/mainwindow.cpp" line="458"/>
+        <location filename="../src/app/mainwindow.cpp" line="468"/>
         <source>Windows Explorer Integration</source>
         <translation>Windows 탐색기 통합</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="446"/>
-        <source>Explorer integration is installed system-wide by the installer.
-To change or remove it, use Windows Installed apps.</source>
-        <translation>탐색기 통합이 설치 프로그램에 의해 시스템 전체에 설치되어 있습니다.
-변경하거나 제거하려면 Windows의 설치된 앱을 사용하세요.</translation>
-    </message>
-    <message>
-        <location filename="../src/app/mainwindow.cpp" line="449"/>
+        <location filename="../src/app/mainwindow.cpp" line="459"/>
         <source>Explorer integration is installed.
 
 Yes: refresh it (e.g. after moving Vyra or changing the language)
@@ -719,29 +736,31 @@ No: remove it</source>
 아니요: 제거</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="453"/>
-        <location filename="../src/app/mainwindow.cpp" line="456"/>
-        <location filename="../src/app/mainwindow.cpp" line="464"/>
+        <location filename="../src/app/mainwindow.cpp" line="451"/>
+        <location filename="../src/app/mainwindow.cpp" line="463"/>
+        <location filename="../src/app/mainwindow.cpp" line="466"/>
+        <location filename="../src/app/mainwindow.cpp" line="474"/>
         <source>Done</source>
         <translation>완료</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="453"/>
+        <location filename="../src/app/mainwindow.cpp" line="463"/>
         <source>Explorer integration updated.</source>
         <translation>탐색기 통합을 갱신했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="456"/>
+        <location filename="../src/app/mainwindow.cpp" line="451"/>
+        <location filename="../src/app/mainwindow.cpp" line="466"/>
         <source>Explorer integration removed.</source>
         <translation>탐색기 통합을 제거했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="464"/>
+        <location filename="../src/app/mainwindow.cpp" line="474"/>
         <source>Explorer integration installed.</source>
         <translation>탐색기 통합을 설치했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="473"/>
+        <location filename="../src/app/mainwindow.cpp" line="485"/>
         <source>The language will change after restarting the app. Restart now?</source>
         <translation>앱을 다시 시작하면 언어가 바뀝니다. 지금 다시 시작할까요?</translation>
     </message>

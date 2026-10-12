@@ -13,6 +13,7 @@ const QString kProgId = QStringLiteral("Vyra.Archive");
 // Version of the verbs and file types below; bump it when they change so
 // isOutdated() lets existing installs pick the change up.
 const QString kLayoutValue = QStringLiteral("VyraLayout");
+const QString kInstallerValue = QStringLiteral("VyraInstaller"); // "msi" on menus the MSI wrote
 constexpr int kLayout = 2; // 2: gz / tgz / lz4
 const QStringList kArchiveExtensions = {QStringLiteral(".7z"), QStringLiteral(".zip"), QStringLiteral(".gz"),
                                         QStringLiteral(".tgz"), QStringLiteral(".lz4")};
@@ -66,12 +67,12 @@ bool removeValue(const QString &subkey, const QString &name)
     return true;
 }
 
-QString readValue(const QString &subkey, const QString &name)
+QString readValue(const QString &subkey, const QString &name, HKEY root = HKEY_CURRENT_USER)
 {
     const QString path = kClasses + subkey;
     wchar_t buffer[2048];
     DWORD size = sizeof(buffer);
-    if (RegGetValueW(HKEY_CURRENT_USER, reinterpret_cast<LPCWSTR>(path.utf16()),
+    if (RegGetValueW(root, reinterpret_cast<LPCWSTR>(path.utf16()),
                      name.isEmpty() ? nullptr : reinterpret_cast<LPCWSTR>(name.utf16()), RRF_RT_REG_SZ, nullptr, buffer,
                      &size) != ERROR_SUCCESS)
         return {};
@@ -168,9 +169,20 @@ bool ShellIntegration::uninstall(QString *error)
 bool ShellIntegration::isInstalled() { return keyExists(HKEY_CURRENT_USER, QStringLiteral("*\\shell\\Vyra")); }
 bool ShellIntegration::isMachineInstalled() { return keyExists(HKEY_LOCAL_MACHINE, QStringLiteral("*\\shell\\Vyra")); }
 
+bool ShellIntegration::isInstallerManaged()
+{
+    return isMachineInstalled() || readValue(QStringLiteral("*\\shell\\Vyra"), kInstallerValue) == QStringLiteral("msi");
+}
+
+bool ShellIntegration::hasPortableMenu()
+{
+    return isInstalled() && readValue(QStringLiteral("*\\shell\\Vyra"), kInstallerValue).isEmpty();
+}
+
 bool ShellIntegration::isOutdated(const QString &executable)
 {
-    if (!isInstalled() || readValue(QStringLiteral("*\\shell\\Vyra"), kLayoutValue) == QString::number(kLayout)) return false;
+    // Only the app's own menu: an MSI menu is updated by the next MSI.
+    if (!hasPortableMenu() || readValue(QStringLiteral("*\\shell\\Vyra"), kLayoutValue) == QString::number(kLayout)) return false;
     const QString command = readValue(QStringLiteral("*\\shell\\Vyra\\shell\\10compress\\command"), {});
     return command.startsWith(u'"' + QDir::toNativeSeparators(executable) + u'"', Qt::CaseInsensitive);
 }
@@ -189,4 +201,6 @@ bool ShellIntegration::uninstall(QString *error)
 bool ShellIntegration::isInstalled() { return false; }
 bool ShellIntegration::isMachineInstalled() { return false; }
 bool ShellIntegration::isOutdated(const QString &) { return false; }
+bool ShellIntegration::isInstallerManaged() { return false; }
+bool ShellIntegration::hasPortableMenu() { return false; }
 #endif

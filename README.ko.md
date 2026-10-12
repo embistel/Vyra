@@ -79,10 +79,21 @@
 
 Vyra의 gzip은 7-Zip보다 **43–49배** 빠릅니다. 7-Zip은 더 느린 Deflate 탐색으로 더 작게 만듭니다. 풀 때는 `.gz`는 직렬로 약 550 MiB/s(gzip에는 블록 색인이 없음), `.lz4`는 병렬로 해제 약 2.5 GiB/s, 파일로 풀기 약 1.4 GiB/s입니다.
 
+## 설치
+
+- **설치 프로그램 `Vyra-<버전>-x64.msi`**:
+  - 더블클릭하면 관리자 권한 없이 현재 사용자용으로 `%LOCALAPPDATA%\Programs\Vyra`에 설치됩니다.
+  - 시작 메뉴와 탐색기 메뉴가 추가되고, *설정 ▸ 앱*에서 제거합니다.
+  - 모든 사용자용으로 설치하려면 관리자 명령 프롬프트에서 `msiexec /i Vyra-<버전>-x64.msi ALLUSERS=1`을 실행하세요. Program Files에 설치되고 모든 사용자에게 메뉴가 생깁니다.
+  - 메뉴 글자는 각 사용자의 Windows 표시 언어를 따릅니다. 한국어가 아니면 영어로 나옵니다.
+  - 아직 코드 서명이 없어서, 실행 전에 Windows SmartScreen 경고가 나옵니다.
+- **휴대용 `Vyra-<버전>-win64.zip`**: 아무 곳에나 풀어서 씁니다. 탐색기 메뉴는 **도구 ▸ Windows 탐색기 통합...** 에서 설치·갱신·제거합니다.
+- Windows 11에서는 "더 많은 옵션 표시" 아래에 메뉴가 나타납니다.
+
 ## 사용법
 
 ### GUI
-`Vyra.exe` 실행 → 파일/폴더를 끌어다 놓거나 **압축**. 압축 파일을 끌어다 놓거나 **열기**로 내용을 보고 풀 수 있습니다. 탐색기 메뉴는 **도구 ▸ Windows 탐색기 통합...** 에서 설치/갱신/제거합니다 (Windows 11은 "더 많은 옵션 표시" 아래).
+`Vyra.exe` 실행 → 파일/폴더를 끌어다 놓거나 **압축**. 압축 파일을 끌어다 놓거나 **열기**로 내용을 보고 풀 수 있습니다. 설치 프로그램으로 설치한 경우 탐색기 메뉴는 Windows Installer가 관리합니다. 앱은 메뉴 상태를 보여 주기만 하고 건드리지 않습니다.
 
 ### CLI
 ```powershell
@@ -110,6 +121,7 @@ vyra-cli bench D:\Data                           # 디스크 제외 처리량 �
 .\scripts\build.ps1 -Test                        # 이후 빌드
 .\scripts\build.ps1 -NoCuda -Test                # GPU 없이 CPU 전용 빌드
 .\scripts\package.ps1                            # out\Vyra-<버전>-win64.zip (Qt, nvCOMP, VC 런타임 포함)
+.\scripts\build-msi.ps1                          # out\Vyra-<버전>-x64.msi (WiX 5.0.2 자동 설치, SHA-512 확인)
 ```
 
 zlib-ng · LZ4 · Zstandard · LZMA SDK는 CMake가 자동으로 받아 정적으로 링크합니다. `nvcomp64_5.dll`은 지연 로드되므로 DLL이나 NVIDIA 드라이버가 없어도 프로그램은 CPU 모드로 실행됩니다.
@@ -120,7 +132,7 @@ zlib-ng · LZ4 · Zstandard · LZMA SDK는 CMake가 자동으로 받아 정적�
 
 - GPU 엔진: 작업 사이에 CUDA 컨텍스트와 버퍼 유지(한 번 실행하는 작업에서 GPU의 가장 큰 불리함은 시작 비용), page-lock 비용 없이 큰 배치
 - **Intel / AMD 내장 그래픽 가속**: `Backend` 인터페이스에 Vulkan compute 또는 oneAPI/OpenCL 백엔드 추가
-- MSI 설치 프로그램(WiX, LMDB Archiver와 동일한 구성), Windows 11 최상위 메뉴(IExplorerCommand)
+- MSI·실행 파일 코드 서명, Windows 11 최상위 메뉴(IExplorerCommand, 서명된 패키지 필요)
 - Vyra가 만든 Deflate 압축과 `.gz`의 GPU 병렬 해제(청크 인덱스), 압축 파일 편집(추가/삭제), 암호화(AES-256), 분할 압축
 - `.lz4` 콘텐츠 체크섬 옵션(순차 xxHash 계산 필요)
 

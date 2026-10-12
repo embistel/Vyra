@@ -113,10 +113,17 @@ int App::run(QApplication &application)
     for (const QString &p : parser.positionalArguments()) paths << QFileInfo(p).absoluteFilePath();
 
     if (parser.isSet(QStringLiteral("install-shell")) || parser.isSet(QStringLiteral("uninstall-shell"))) {
+        const bool installing = parser.isSet(QStringLiteral("install-shell"));
+        // The installer's menu belongs to Windows Installer. Removing a
+        // portable copy's per-user menu (which may hide it) stays possible.
+        if (ShellIntegration::isInstallerManaged() && (installing || !ShellIntegration::hasPortableMenu())) {
+            QMessageBox::information(nullptr, QStringLiteral("Vyra"),
+                QCoreApplication::translate("App", "Explorer integration is managed by the Vyra installer.\nTo change or remove it, use Windows Installed apps."));
+            return 1;
+        }
         QString error;
-        const bool ok = parser.isSet(QStringLiteral("install-shell"))
-            ? ShellIntegration::install(QCoreApplication::applicationFilePath(), koreanUi(), &error)
-            : ShellIntegration::uninstall(&error);
+        const bool ok = installing ? ShellIntegration::install(QCoreApplication::applicationFilePath(), koreanUi(), &error)
+                                   : ShellIntegration::uninstall(&error);
         if (!ok) QMessageBox::critical(nullptr, QStringLiteral("Vyra"), error);
         return ok ? 0 : 1;
     }

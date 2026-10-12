@@ -1,3 +1,44 @@
+#pragma code_page(65001)
+#include <winresrc.h>
+
 // Numeric ids keep the order stable: index 0 = app icon, 1 = archive icon.
 1 ICON "app.ico"
 2 ICON "archive.ico"
+
+// Explorer menu text for the installer's registration ("@Vyra.exe,-<id>").
+// Windows picks the table matching the user's display language and falls
+// back to English (a language-neutral table would always win, so English is
+// tagged en-US). Keep in sync with ShellIntegration::install.
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+STRINGTABLE
+BEGIN
+    101 "Compress..."
+    102 "Fast compress to .7z (GPU)"
+    103 "Compress to .zip"
+    104 "Compress each file to .gz"
+    105 "Compress each file to .lz4"
+    110 "Vyra Extract"
+    111 "Open with Vyra"
+    112 "Extract Here"
+    113 "Extract to Folder"
+    114 "Extract..."
+    115 "Test Archive"
+    120 "Vyra Archive"
+END
+
+LANGUAGE LANG_KOREAN, SUBLANG_KOREAN
+STRINGTABLE
+BEGIN
+    101 "압축하기..."
+    102 "7z로 빠르게 압축 (GPU)"
+    103 "ZIP으로 압축"
+    104 "각 파일을 .gz로 압축"
+    105 "각 파일을 .lz4로 압축"
+    110 "Vyra 압축 풀기"
+    111 "Vyra로 열기"
+    112 "여기에 풀기"
+    113 "폴더를 만들어 풀기"
+    114 "압축 풀기..."
+    115 "압축 파일 테스트"
+    120 "Vyra 압축 파일"
+END

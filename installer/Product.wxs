@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vyra installer (WiX 5). Built by scripts/build-msi.ps1 from the files that
+  scripts/package.ps1 stages.
+
+  Double-click installs for the current user, without administrator rights
+  (%LOCALAPPDATA%\Programs\Vyra; perUserOrMachine sets ALLUSERS=2 and
+  MSIINSTALLPERUSER=1). For all users (Program Files, asks for
+  administrator rights):
+    msiexec /i Vyra-<version>-x64.msi ALLUSERS=1
+
+  The Explorer menus mirror ShellIntegration::install. They go to HKMU
+  (HKLM per machine, HKCU per user), carry VyraInstaller=msi so the app
+  leaves them alone, and take their text from Vyra.exe's string tables
+  ("@Vyra.exe,-<id>"), so every user sees their own display language.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Vyra"
+           Manufacturer="embistel"
+           Version="$(Version)"
+           UpgradeCode="2C008CE6-66B5-4D89-A309-20517E1DE9DF"
+           Scope="perUserOrMachine"
+           Codepage="65001"
+           InstallerVersion="500"
+           Compressed="yes">
+    <SummaryInformation Description="Vyra GPU accelerated archiver" />
+    <!-- Rebuilds keep the version, so a same-version MSI must replace the
+         installed one instead of installing a second copy. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Vyra is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/embistel/Vyra" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/embistel/Vyra" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon.ico" />
+    <Icon Id="ProductIcon.ico" SourceFile="resources\app.ico" />
+    <!-- Advertised shortcuts need an icon file of the target's type (ICE50). -->
+    <Icon Id="Vyra.exe" SourceFile="!(bindpath.Payload)\Vyra.exe" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="installer\license.rtf" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Vyra" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Vyra" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="CliExecutable" />
+      <ComponentRef Id="ExplorerMenus" />
+      <Files Include="!(bindpath.Payload)\**" Directory="INSTALLFOLDER">
+        <Exclude Files="!(bindpath.Payload)\Vyra.exe" />
+        <Exclude Files="!(bindpath.Payload)\vyra-cli.exe" />
+      </Files>
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutable">
+        <File Id="VyraExe" Source="!(bindpath.Payload)\Vyra.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Vyra"
+                    Description="GPU accelerated archiver" WorkingDirectory="INSTALLFOLDER"
+                    Icon="Vyra.exe" Advertise="yes" />
+        </File>
+      </Component>
+      <Component Id="CliExecutable">
+        <File Id="VyraCli" Source="!(bindpath.Payload)\vyra-cli.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="ExplorerMenus">
+        <!-- Files and folders: the "Vyra" cascade. -->
+        <?foreach base in *\shell\Vyra;Directory\shell\Vyra ?>
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)" Name="MUIVerb" Value="Vyra" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)" Name="Icon" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot;,0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)" Name="SubCommands" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\10compress" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-101" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\10compress\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --compress &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\20add7z" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-102" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\20add7z\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --add-7z &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\30addzip" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-103" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\30addzip\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --add-zip &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\40addgz" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-104" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\40addgz\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --add-gz &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\50addlz4" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-105" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(base)\shell\50addlz4\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --add-lz4 &quot;%1&quot;" Type="string" />
+        <?endforeach?>
+        <!-- Menu version and owner, read by ShellIntegration. -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\Vyra" Name="VyraLayout" Value="2" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\*\shell\Vyra" Name="VyraInstaller" Value="msi" Type="string" KeyPath="yes" />
+
+        <!-- Archives: the "Vyra Extract" cascade and "Open with". -->
+        <?foreach ext in .7z;.zip;.gz;.tgz;.lz4 ?>
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-110" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract" Name="Icon" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot;,1" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract" Name="SubCommands" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\10open" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-111" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\10open\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\20here" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-112" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\20here\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --extract-here &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\30folder" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-113" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\30folder\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --extract-folder &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\40dialog" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-114" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\40dialog\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --extract-dialog &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\50test" Name="MUIVerb" Value="@[INSTALLFOLDER]Vyra.exe,-115" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\$(ext)\shell\VyraExtract\shell\50test\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; --test &quot;%1&quot;" Type="string" />
+        <!-- "Open with" entry, leaving the user's default program alone. -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\$(ext)\OpenWithProgids" Name="Vyra.Archive" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\Vyra.exe\SupportedTypes" Name="$(ext)" Value="" Type="string" />
+        <?endforeach?>
+
+        <RegistryValue Root="HKMU" Key="Software\Classes\Vyra.Archive" Value="Vyra Archive" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Vyra.Archive" Name="FriendlyTypeName" Value="@[INSTALLFOLDER]Vyra.exe,-120" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Vyra.Archive\DefaultIcon" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot;,1" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Vyra.Archive\shell\open\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\Vyra.exe" Name="FriendlyAppName" Value="Vyra" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\Vyra.exe\shell\open\command" Value="&quot;[INSTALLFOLDER]Vyra.exe&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>
