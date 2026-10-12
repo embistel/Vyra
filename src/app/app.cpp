@@ -29,6 +29,15 @@ bool koreanUi()
     return lang == QStringLiteral("ko") || (lang == QStringLiteral("auto") && QLocale().language() == QLocale::Korean);
 }
 
+// Menus installed by an older version of this executable gain the entries
+// added since (gz / lz4). Only the process that does the work calls this: a
+// multi-selection starts one process per file.
+void refreshOutdatedShell()
+{
+    const QString exe = QCoreApplication::applicationFilePath();
+    if (ShellIntegration::isOutdated(exe)) ShellIntegration::install(exe, koreanUi());
+}
+
 // An Explorer verb's process has nothing left to do after its job: settings
 // are flushed, then the orderly teardown (CUDA context, page-locked buffers,
 // DLL detach), which takes a few hundred milliseconds, is skipped.
@@ -111,18 +120,16 @@ int App::run(QApplication &application)
         if (!ok) QMessageBox::critical(nullptr, QStringLiteral("Vyra"), error);
         return ok ? 0 : 1;
     }
-    // Menus installed by an older version of this executable gain the
-    // entries added since (gz / lz4), whether Vyra starts from a verb or not.
-    if (ShellIntegration::isOutdated(QCoreApplication::applicationFilePath()))
-        ShellIntegration::install(QCoreApplication::applicationFilePath(), koreanUi());
     for (const QString &verb : verbs) {
         if (!parser.isSet(verb)) continue;
         application.setQuitOnLastWindowClosed(false);
         const auto collected = collectInvocations(verb, paths);
         if (!collected) return 0; // handed over to the collecting process
+        refreshOutdatedShell();
         return finishVerb(runVerb(verb, *collected));
     }
 
+    refreshOutdatedShell();
     MainWindow window;
     if (paths.size() == 1 && QFileInfo(paths.first()).isFile()) window.openArchive(paths.first());
     window.show();

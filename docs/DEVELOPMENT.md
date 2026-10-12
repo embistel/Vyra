@@ -99,7 +99,7 @@ nvCOMP의 청크는 각각 완결된 raw Deflate 스트림입니다. ZIP 항목�
 - `*\shell\Vyra`, `Directory\shell\Vyra`: `MUIVerb`, `Icon`, `SubCommands=""` + `shell\10compress|20add7z|30addzip|40addgz|50addlz4\command`
 - `SystemFileAssociations\.7z|.zip|.gz|.tgz|.lz4\shell\VyraExtract`: 열기/여기에 풀기/폴더에 풀기/압축 풀기.../테스트
 - `.7z|.zip|.gz|.tgz|.lz4\OpenWithProgids\Vyra.Archive`, `Vyra.Archive`, `Applications\Vyra.exe` ("연결 프로그램" 목록에만 추가, 기본 앱은 바꾸지 않음)
-- `*\shell\Vyra`의 `VyraLayout` 값이 메뉴 구성의 버전입니다(현재 2). 실행한 exe가 등록된 exe와 같고 값이 다르면(이전 버전 설치) 시작할 때 다시 설치합니다. 다른 위치의 Vyra(예: 빌드 폴더)는 남의 통합을 바꾸지 않습니다. 동사·형식을 바꾸면 `kLayout`을 올리세요.
+- `*\shell\Vyra`의 `VyraLayout` 값이 메뉴 구성의 버전입니다(현재 2). 실행한 exe가 등록된 exe와 같고 값이 다르면(이전 버전 설치) 다시 설치합니다. 작업을 맡는 프로세스(GUI, 또는 다중 선택 수집이 끝난 수집자)만 하므로, 다중 선택으로 프로세스가 여러 개 떠도 한 번만 씁니다. 다른 위치의 Vyra(예: 빌드 폴더)는 남의 통합을 바꾸지 않습니다. 동사·형식을 바꾸면 `kLayout`을 올리세요.
 
 정적 동사는 선택한 파일마다 프로세스를 하나씩 띄웁니다. `singleinstance.cpp`의 수집기가 첫 프로세스를 수집자로 정하고(QLockFile) 나머지 경로를 QLocalSocket으로 받은 뒤 600 ms 동안 새 요청이 없으면 하나의 작업으로 실행합니다.
 
