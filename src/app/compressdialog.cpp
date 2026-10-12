@@ -50,7 +50,11 @@ vyra::CompressOptions CompressDialog::savedOptions(vyra::Format format)
     QSettings s;
     vyra::CompressOptions o;
     o.format = format;
-    if (format == vyra::Format::Zip) {
+    if (format == vyra::Format::Gzip) {
+        o.method = vyra::Method::Deflate;
+    } else if (format == vyra::Format::Lz4) {
+        o.method = vyra::Method::LZ4;
+    } else if (format == vyra::Format::Zip) {
         o.method = vyra::Method(s.value(QStringLiteral("compress/methodZip"), int(vyra::Method::Deflate)).toInt());
         if (!vyra::methodSupportedFor(format, o.method)) o.method = vyra::Method::Deflate;
     } else {
@@ -89,6 +93,7 @@ CompressDialog::CompressDialog(const QStringList &inputs, QWidget *parent) : QDi
     m_path = new QLineEdit(this);
     auto *browse = new QToolButton(this);
     browse->setText(QStringLiteral("…"));
+    m_browse = browse;
     pathRow->addWidget(m_path, 1);
     pathRow->addWidget(browse);
     form->addRow(tr("Archive:"), pathRow);
@@ -96,6 +101,8 @@ CompressDialog::CompressDialog(const QStringList &inputs, QWidget *parent) : QDi
     m_format = new QComboBox(this);
     m_format->addItem(QStringLiteral("7z"), int(vyra::Format::SevenZip));
     m_format->addItem(QStringLiteral("zip"), int(vyra::Format::Zip));
+    m_format->addItem(tr("gz — each file"), int(vyra::Format::Gzip));
+    m_format->addItem(tr("lz4 — each file"), int(vyra::Format::Lz4));
     form->addRow(tr("Format:"), m_format);
 
     m_method = new QComboBox(this);
@@ -157,9 +164,14 @@ CompressDialog::CompressDialog(const QStringList &inputs, QWidget *parent) : QDi
     connect(m_method, &QComboBox::currentIndexChanged, this, &CompressDialog::methodChanged);
 
     const QString lastFormat = QSettings().value(QStringLiteral("compress/format"), QStringLiteral("7z")).toString();
-    const vyra::Format format = lastFormat == QStringLiteral("zip") ? vyra::Format::Zip : vyra::Format::SevenZip;
+    const vyra::Format format = lastFormat == QStringLiteral("zip") ? vyra::Format::Zip
+                              : lastFormat == QStringLiteral("gz")  ? vyra::Format::Gzip
+                              : lastFormat == QStringLiteral("lz4") ? vyra::Format::Lz4
+                                                                    : vyra::Format::SevenZip;
     const vyra::CompressOptions saved = savedOptions(format);
-    m_path->setText(QDir::toNativeSeparators(defaultArchivePath(inputs, QString::fromLatin1(vyra::formatName(format)))));
+    // gz / lz4 keep a 7z path ready for a switch back to an archive format.
+    const QString ext = vyra::singleFileFormat(format) ? QStringLiteral("7z") : QString::fromLatin1(vyra::formatName(format));
+    m_path->setText(QDir::toNativeSeparators(defaultArchivePath(inputs, ext)));
     selectData(m_format, int(format));
     formatChanged();
     selectData(m_method, int(saved.method));
@@ -180,20 +192,33 @@ void CompressDialog::formatChanged()
         m_method->addItem(tr("Zstd — fast, smaller"), int(vyra::Method::Zstd));
         m_method->addItem(tr("Deflate — opens in official 7-Zip"), int(vyra::Method::Deflate));
         m_method->addItem(tr("Store — no compression"), int(vyra::Method::Store));
-    } else {
+    } else if (format == vyra::Format::Zip) {
         m_method->addItem(tr("Deflate — opens everywhere"), int(vyra::Method::Deflate));
         m_method->addItem(tr("Store — no compression"), int(vyra::Method::Store));
+    } else if (format == vyra::Format::Gzip) {
+        m_method->addItem(tr("Deflate — opens everywhere"), int(vyra::Method::Deflate));
+    } else {
+        m_method->addItem(tr("LZ4 — fastest"), int(vyra::Method::LZ4));
     }
     selectData(m_method, int(savedOptions(format).method));
-    // Keep the file name, switch the extension.
-    QString path = m_path->text();
     const QString ext = QString::fromLatin1(vyra::formatName(format));
-    const QFileInfo info(path);
-    if (!path.isEmpty()) {
-        const QString suffix = info.suffix().toLower();
-        if (suffix == QStringLiteral("7z") || suffix == QStringLiteral("zip")) path.chop(suffix.size() + 1);
-        m_path->setText(path + u'.' + ext);
+    const bool eachFile = vyra::singleFileFormat(format);
+    if (eachFile) {
+        // gz / lz4 hold one file: every file gets its own output.
+        if (m_path->isEnabled()) m_archivePath = m_path->text();
+        m_path->setText(tr("Next to each file: <name>.%1").arg(ext));
+    } else {
+        // Keep the file name, switch the extension.
+        QString path = m_path->isEnabled() ? m_path->text() : m_archivePath;
+        const QFileInfo info(path);
+        if (!path.isEmpty()) {
+            const QString suffix = info.suffix().toLower();
+            if (suffix == QStringLiteral("7z") || suffix == QStringLiteral("zip")) path.chop(suffix.size() + 1);
+            m_path->setText(path + u'.' + ext);
+        }
     }
+    m_path->setEnabled(!eachFile);
+    m_browse->setEnabled(!eachFile);
     m_solid->setEnabled(format == vyra::Format::SevenZip);
     methodChanged();
 }
@@ -206,7 +231,11 @@ void CompressDialog::methodChanged()
     m_backend->setEnabled(method != vyra::Method::Store);
     m_chunk->setEnabled(method == vyra::Method::LZ4 || method == vyra::Method::Zstd);
     QString note;
-    if (format == vyra::Format::Zip)
+    if (format == vyra::Format::Gzip)
+        note = tr("Standard gzip, one .gz per file: opens in 7-Zip, WinRAR, gzip and every Unix tool.");
+    else if (format == vyra::Format::Lz4)
+        note = tr("Standard LZ4 frame, one .lz4 per file: opens in the lz4 tool, 7-Zip-zstd and NanaZip.");
+    else if (format == vyra::Format::Zip)
         note = tr("Standard ZIP: opens in Windows Explorer, 7-Zip and every other unzip tool.");
     else if (method == vyra::Method::Deflate || method == vyra::Method::Store)
         note = tr("Standard 7z: opens in the official 7-Zip, NanaZip and other 7z tools.");
@@ -242,14 +271,16 @@ vyra::CompressOptions CompressDialog::options() const
 void CompressDialog::accept()
 {
     const QString path = archivePath();
-    if (path.isEmpty()) return;
-    if (QFileInfo::exists(path) &&
+    const bool eachFile = vyra::singleFileFormat(options().format);
+    if (path.isEmpty() && !eachFile) return;
+    if (!eachFile && QFileInfo::exists(path) &&
         QMessageBox::question(this, windowTitle(), tr("%1 already exists. Replace it?").arg(QFileInfo(path).fileName())) != QMessageBox::Yes)
         return;
     const vyra::CompressOptions o = options();
     QSettings s;
     s.setValue(QStringLiteral("compress/format"), QString::fromLatin1(vyra::formatName(o.format)));
-    s.setValue(o.format == vyra::Format::Zip ? QStringLiteral("compress/methodZip") : QStringLiteral("compress/method7z"), int(o.method));
+    if (o.format == vyra::Format::Zip || o.format == vyra::Format::SevenZip)
+        s.setValue(o.format == vyra::Format::Zip ? QStringLiteral("compress/methodZip") : QStringLiteral("compress/method7z"), int(o.method));
     s.setValue(QStringLiteral("compress/level"), o.level);
     s.setValue(QStringLiteral("compress/backend"), int(o.backend));
     s.setValue(QStringLiteral("compress/solid"), QVariant::fromValue<qulonglong>(o.solidBlockSize));

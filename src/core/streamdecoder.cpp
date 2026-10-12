@@ -64,6 +64,60 @@ private:
     bool m_finished = false;
 };
 
+// gzip: zlib parses each member's header and checks its CRC32 and size;
+// members follow each other (multi-member files such as pigz/ParlZip output).
+// Zero bytes after the last member (tape padding) are ignored.
+class GzipDecoder final : public StreamDecoder {
+public:
+    GzipDecoder() : m_out(kOutBlock)
+    {
+        std::memset(&m_stream, 0, sizeof(m_stream));
+        if (zng_inflateInit2(&m_stream, 15 + 16) != Z_OK) throw Error("zlib-ng inflate initialisation failed");
+    }
+    ~GzipDecoder() override { zng_inflateEnd(&m_stream); }
+    void feed(const std::uint8_t *data, std::size_t size, bool end, const Sink &sink) override
+    {
+        m_stream.next_in = data;
+        m_stream.avail_in = std::uint32_t(size);
+        for (;;) {
+            if (!m_inMember) {
+                while (m_stream.avail_in && *m_stream.next_in == 0) {
+                    ++m_stream.next_in;
+                    --m_stream.avail_in;
+                    m_padding = true;
+                }
+                if (!m_stream.avail_in) break;
+                if (m_padding) throw Error("unexpected data after the end of the gzip file");
+                if (m_members && zng_inflateReset(&m_stream) != Z_OK) throw Error("zlib-ng inflate reset failed");
+                m_inMember = true;
+            }
+            m_stream.next_out = m_out.data();
+            m_stream.avail_out = std::uint32_t(m_out.size());
+            const int rc = zng_inflate(&m_stream, Z_NO_FLUSH);
+            const std::size_t produced = m_out.size() - m_stream.avail_out;
+            if (produced) sink(m_out.data(), produced);
+            if (rc == Z_STREAM_END) {
+                m_inMember = false;
+                ++m_members;
+                continue;
+            }
+            if (rc == Z_BUF_ERROR || (rc == Z_OK && !m_stream.avail_in && m_stream.avail_out)) {
+                if (!m_stream.avail_in) break; // needs more input
+                continue;
+            }
+            if (rc != Z_OK) throw Error(rc == Z_DATA_ERROR && m_stream.msg ? std::string("corrupt gzip data: ") + m_stream.msg : "corrupt gzip data");
+        }
+        if (end && (m_inMember || m_members == 0)) throw Error(m_members ? "truncated gzip file" : "not a gzip file");
+    }
+
+private:
+    zng_stream m_stream;
+    std::vector<std::uint8_t> m_out;
+    bool m_inMember = false;
+    bool m_padding = false;
+    std::size_t m_members = 0;
+};
+
 class LzmaDecoder final : public StreamDecoder {
 public:
     LzmaDecoder(const std::vector<std::uint8_t> &props, std::uint64_t unpackSize, bool lzma2)
@@ -330,6 +384,8 @@ private:
 };
 
 } // namespace
+
+std::unique_ptr<StreamDecoder> createGzipDecoder() { return std::make_unique<GzipDecoder>(); }
 
 bool canDecode(Method method)
 {

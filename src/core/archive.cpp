@@ -173,6 +173,10 @@ template<class Fn> double runWithProgress(SharedState &state, const ProgressCall
     return seconds;
 }
 
+// gzip extra subfield written by Vyra: the exact 64-bit uncompressed size
+// (ISIZE in the trailer is only the size modulo 4 GiB).
+constexpr std::uint8_t kGzipSizeId1 = 'V', kGzipSizeId2 = 'y';
+
 // ---------------------------------------------------------------------------
 // Input scanning
 // ---------------------------------------------------------------------------
@@ -427,8 +431,8 @@ struct StageTimer {
 
 class Compressor {
 public:
-    Compressor(const fs::path &archive, const CompressOptions &options, SharedState &state)
-        : m_archive(archive), m_options(options), m_state(state), m_pool(options.threads) {}
+    Compressor(const fs::path &archive, const CompressOptions &options, SharedState &state, bool eachFile = false)
+        : m_archive(archive), m_options(options), m_state(state), m_pool(options.threads), m_eachFile(eachFile) {}
 
     OperationResult run(const std::vector<fs::path> &inputs, const ProgressCallback &progress)
     {
@@ -439,16 +443,19 @@ public:
                 profileMark("job start");
                 const auto t0 = Clock::now();
                 m_items = scanInputs(inputs, m_archive, m_state, result.warnings);
+                if (singleFileFormat(m_options.format)) planSingleFileOutputs(result.warnings);
                 startBackend();
                 const auto t1 = Clock::now();
                 prepareLayout();
                 const auto t2 = Clock::now();
                 m_state.phase = int(Phase::Compressing);
-                m_out.create(m_options.discardOutput ? nullDevice() : temp, !m_options.discardOutput);
+                const bool archiveFile = !singleFileFormat(m_options.format);
+                if (archiveFile) m_out.create(m_options.discardOutput ? nullDevice() : temp, !m_options.discardOutput);
                 pipeline();
                 profileMark("pipeline done");
                 const auto t3 = Clock::now();
                 m_state.phase = int(Phase::Finalizing);
+                if (!archiveFile) return; // each output was renamed by the writer
                 m_out.close();
                 if (std::getenv("VYRA_PROFILE")) {
                     auto sec = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count(); };
@@ -469,12 +476,12 @@ public:
                 try { m_out.close(); } catch (...) {}
             }
             std::error_code ec;
-            if (!m_options.discardOutput) fs::remove(temp, ec);
+            if (!m_options.discardOutput && !singleFileFormat(m_options.format)) fs::remove(temp, ec);
             throw;
         }
         result.inputBytes = m_state.bytesTotal;
         result.outputBytes = m_state.outputBytes;
-        result.files = m_items.size();
+        result.files = singleFileFormat(m_options.format) ? m_state.filesDone.load() : m_items.size();
         result.backend = m_state.backend;
         return result;
     }
@@ -499,6 +506,44 @@ private:
             std::unique_ptr<Backend> gpu = createGpuBackend(device, &reason);
             return std::make_pair(std::move(gpu), reason);
         });
+    }
+
+    // gz / lz4 hold one file each: keep regular files only and choose each
+    // one's output. Each-file mode skips files that already carry the
+    // extension and outputs that exist (like gzip); a single explicit
+    // output (createArchive) must be given exactly one file.
+    void planSingleFileOutputs(std::vector<std::string> &warnings)
+    {
+        const std::string ext = std::string(".") + formatName(m_options.format);
+        std::vector<Item> kept;
+        std::uint64_t bytes = 0;
+        for (Item &item : m_items) {
+            if (item.directory) continue;
+            fs::path out = fs::path(item.source).concat(ext);
+            if (m_eachFile) {
+                // Already compressed by one of these formats: nothing to gain.
+                const std::string sourceExt = lowerAscii(utf8FromPath(item.source.extension()));
+                if (sourceExt == ".gz" || sourceExt == ".tgz" || sourceExt == ".lz4") {
+                    warnings.push_back(utf8FromPath(item.source) + ": already compressed, skipped");
+                    continue;
+                }
+                std::error_code ec;
+                if (fs::exists(out, ec)) {
+                    warnings.push_back(utf8FromPath(out) + ": exists, not overwritten");
+                    continue;
+                }
+            } else {
+                out = m_archive;
+            }
+            bytes += item.size;
+            m_outputs.push_back(out);
+            kept.push_back(std::move(item));
+        }
+        if (!m_eachFile && kept.size() != 1)
+            throw Error(std::string(formatName(m_options.format)) + " holds exactly one file; compress folders or several files to zip or 7z, or each file separately");
+        m_items = std::move(kept);
+        m_state.bytesTotal = bytes;
+        m_state.filesTotal = m_items.size();
     }
 
     // Auto engine choice. Small jobs: CUDA start-up (~0.5 s) would dominate.
@@ -587,7 +632,7 @@ private:
         std::uint64_t folderBytes = 0;
         for (Item &item : m_items) {
             if (item.directory || item.size == 0) continue;
-            if (m_options.format == Format::Zip) {
+            if (m_options.format == Format::Zip || singleFileFormat(m_options.format)) {
                 item.stream = ++stream;
                 continue;
             }
@@ -753,6 +798,7 @@ private:
             std::fprintf(stderr, "[profile] read %.2fs (wait buf %.2fs) | crc %.2fs compress %.2fs post %.2fs (wait input %.2fs) | write %.2fs (wait %.2fs)\n",
                          m_tRead.seconds(), m_tReadWait.seconds(), m_tCrc.seconds(), m_tCompress.seconds(), m_tPost.seconds(),
                          m_tCodecWait.seconds(), m_tWrite.seconds(), m_tWriteWait.seconds());
+            std::fprintf(stderr, "[profile] %d batches read through file mapping\n", m_mappedBatches);
         }
         if (m_error) std::rethrow_exception(m_error);
         if (m_state.cancel) throw Cancelled();
@@ -797,7 +843,7 @@ private:
         int current = -1;
         auto pushChunk = [&](std::size_t offset, std::size_t size, bool end) {
             batch->chunks.push_back({offset, size});
-            batch->streamStart.push_back(pendingStart ? 1 : 0);
+            batch->streamStart.push_back(pendingStart && m_options.format != Format::Lz4 ? 1 : 0);
             batch->streamEnd.push_back(end ? 1 : 0);
             batch->chunkStream.push_back(std::uint32_t(current));
             pendingStart = false;
@@ -856,7 +902,7 @@ private:
                 }
                 m_state.checkCancel();
             }
-            if (m_options.format == Format::Zip) {
+            if (m_options.format == Format::Zip || singleFileFormat(m_options.format)) {
                 closeChunk(true);
                 current = -1;
             }
@@ -893,6 +939,7 @@ private:
         if (!view) return false;
         b.view = view;
         b.data = const_cast<std::uint8_t *>(view.data); // read-only use
+        ++m_mappedBatches;
         // Map the pages here, on the I/O threads (one read per page), so the
         // compression threads do not take a soft fault per page later.
         const std::size_t pages = (bufferEnd + 4095) / 4096, parts = 16;
@@ -1054,8 +1101,161 @@ private:
         }
     }
 
+    // Batches finish out of order; hands them out in sequence. False at the end.
+    bool nextBatchInOrder(std::unique_ptr<Batch> &batch)
+    {
+        for (;;) {
+            auto found = m_early.find(m_expected);
+            if (found != m_early.end()) {
+                batch = std::move(found->second);
+                m_early.erase(found);
+                ++m_expected;
+                return true;
+            }
+            std::optional<std::unique_ptr<Batch>> next;
+            {
+                StageTimer::Scope timing{m_tWriteWait};
+                next = m_writeQueue.pop();
+            }
+            if (!next) {
+                if (!m_early.empty() && !m_error && !m_state.cancel) throw Error("internal error: missing batch");
+                return false;
+            }
+            if ((*next)->sequence != m_expected) {
+                const std::uint64_t seq = (*next)->sequence;
+                m_early.emplace(seq, std::move(*next));
+                continue;
+            }
+            batch = std::move(*next);
+            ++m_expected;
+            return true;
+        }
+    }
+
+    void recycleBatch(std::unique_ptr<Batch> batch)
+    {
+        if (m_timeline) {
+            const double *t = batch->stamps;
+            std::fprintf(stderr, "[batch] %3llu plan %7.3f read %7.3f codec %7.3f..%7.3f post %7.3f written %7.3f\n",
+                         static_cast<unsigned long long>(batch->sequence), t[0], t[1], t[2], t[3], t[4], processUptime());
+        }
+        batch->reset();
+        m_freeBatches.push(std::move(batch));
+        m_state.checkCancel();
+    }
+
+    // gz / lz4: one output file per input file, each written next to its
+    // source (or to the archive path for a single file) via a temporary name.
+    void writerLoopPerFile()
+    {
+        const bool gzip = m_options.format == Format::Gzip;
+        OutFile out;
+        fs::path temp, target;
+        std::uint32_t crc = 0;
+        std::uint64_t written = 0;
+        auto open = [&](const Item &item, std::size_t index) {
+            target = m_outputs[index];
+            temp = m_options.discardOutput ? nullDevice() : fs::path(target).concat(".vyra-partial");
+            out.create(temp, !m_options.discardOutput && item.size >= (std::uint64_t(16) << 20));
+            crc = 0;
+            std::uint8_t header[64];
+            std::size_t n = 0;
+            if (gzip) {
+                // Name only when it is plain ASCII: FNAME is ISO-8859-1.
+                const std::string name = utf8FromPath(item.source.filename());
+                const bool ascii = std::all_of(name.begin(), name.end(), [](char c) { return c > 0 && c < 0x7F; });
+                const std::uint32_t unixTime = item.mtime > kFileTimeUnixEpoch ? std::uint32_t((item.mtime - kFileTimeUnixEpoch) / 10000000ULL) : 0;
+                header[0] = 0x1F; header[1] = 0x8B; header[2] = 8;
+                header[3] = std::uint8_t(0x04 | (ascii ? 0x08 : 0)); // FEXTRA (+ FNAME)
+                setLE32(header + 4, unixTime);
+                header[8] = 0;  // XFL
+                header[9] = 11; // OS: NTFS
+                header[10] = 12; header[11] = 0; // XLEN
+                header[12] = kGzipSizeId1; header[13] = kGzipSizeId2; header[14] = 8; header[15] = 0;
+                for (int k = 0; k < 8; ++k) header[16 + k] = std::uint8_t(item.size >> (8 * k));
+                n = 24;
+                out.write(header, n);
+                if (ascii) out.write(name.c_str(), name.size() + 1);
+                n += ascii ? name.size() + 1 : 0;
+            } else {
+                n = writeLz4SizedFrameHeader(header, lz4BlockMaximum(m_chunkSize), item.size);
+                out.write(header, n);
+            }
+            written = n;
+        };
+        auto finish = [&](const Item &item) {
+            if (gzip) {
+                std::uint8_t trailer[8];
+                setLE32(trailer, crc);
+                setLE32(trailer + 4, std::uint32_t(item.size));
+                out.write(trailer, 8);
+                written += 8;
+            }
+            out.close();
+            m_state.outputBytes += written;
+            if (m_options.discardOutput) return;
+            std::error_code ec;
+            fs::rename(temp, target, ec);
+            if (ec) {
+                fs::remove(target, ec);
+                fs::rename(temp, target, ec);
+                if (ec) throw Error("cannot create " + utf8FromPath(target) + ": " + ec.message());
+            }
+            applyFileMetadata(target, item.mtime, 0, false);
+        };
+        // A file still open when the batches stop (cancelled, or failed in
+        // another stage) is incomplete: drop its temporary file.
+        auto abandon = [&] {
+            if (!out.isOpen()) return;
+            try { out.close(); } catch (...) {}
+            std::error_code ec;
+            if (!m_options.discardOutput) fs::remove(temp, ec);
+        };
+        try {
+            std::unique_ptr<Batch> next;
+            while (nextBatchInOrder(next)) {
+                StageTimer::Scope writeTiming{m_tWrite};
+                Batch &b = *next;
+                std::size_t c = 0;
+                for (std::size_t s = 0; s < b.segments.size(); ++s) {
+                    const Segment &seg = b.segments[s];
+                    const Item &item = m_items[seg.item];
+                    if (seg.first) {
+                        m_state.setItem(item.name);
+                        open(item, seg.item);
+                    }
+                    if (item.stream < 0) { // empty file: an empty stream
+                        static const std::uint8_t emptyDeflate[2] = {0x03, 0x00}, endMark[4] = {0, 0, 0, 0};
+                        if (gzip) out.write(emptyDeflate, 2);
+                        else out.write(endMark, 4);
+                        written += gzip ? 2 : 4;
+                    } else {
+                        const std::size_t from = c;
+                        while (c < b.chunks.size() && b.chunks[c].offset < seg.offset + seg.size) ++c;
+                        writeChunks(b.output, from, c, [&](const std::uint8_t *p, std::size_t n) {
+                            out.write(p, n);
+                            written += n;
+                        });
+                        crc = crc32Combine(crc, b.segmentCrc[s], seg.size);
+                    }
+                    if (seg.last) {
+                        finish(item);
+                        ++m_state.filesDone;
+                    }
+                    m_state.bytesDone += seg.size;
+                }
+                recycleBatch(std::move(next));
+            }
+            abandon();
+        } catch (...) {
+            abandon();
+            throw;
+        }
+    }
+
     void writerLoop()
     {
+        if (singleFileFormat(m_options.format)) return writerLoopPerFile();
         std::optional<ZipWriter> zip;
         std::optional<SevenZWriter> sevenZ;
         if (m_options.format == Format::Zip) zip.emplace(m_out);
@@ -1065,32 +1265,10 @@ private:
         }
         std::vector<std::uint32_t> fileCrc(m_items.size(), 0);
         std::uint32_t entryCrc = 0;
-        std::map<std::uint64_t, std::unique_ptr<Batch>> early; // finished out of order
-        std::uint64_t expected = 0;
-        for (;;) {
-            std::optional<std::unique_ptr<Batch>> next;
-            auto found = early.find(expected);
-            if (found != early.end()) {
-                next = std::move(found->second);
-                early.erase(found);
-            } else {
-                {
-                    StageTimer::Scope timing{m_tWriteWait};
-                    next = m_writeQueue.pop();
-                }
-                if (!next) {
-                    if (!early.empty() && !m_error && !m_state.cancel) throw Error("internal error: missing batch");
-                    break;
-                }
-                if ((*next)->sequence != expected) {
-                    const std::uint64_t seq = (*next)->sequence;
-                    early.emplace(seq, std::move(*next));
-                    continue;
-                }
-            }
-            ++expected;
+        std::unique_ptr<Batch> next;
+        while (nextBatchInOrder(next)) {
             StageTimer::Scope writeTiming{m_tWrite};
-            Batch &b = **next;
+            Batch &b = *next;
             std::size_t c = 0;
             for (std::size_t s = 0; s < b.segments.size(); ++s) {
                 const Segment &seg = b.segments[s];
@@ -1132,14 +1310,7 @@ private:
                 writeChunks(b.output, 0, b.chunks.size(), [&](const std::uint8_t *p, std::size_t n) { m_out.write(p, n); });
             }
             m_state.outputBytes = m_out.tell();
-            if (m_timeline) {
-                const double *t = b.stamps;
-                std::fprintf(stderr, "[batch] %3llu plan %7.3f read %7.3f codec %7.3f..%7.3f post %7.3f written %7.3f\n",
-                             static_cast<unsigned long long>(b.sequence), t[0], t[1], t[2], t[3], t[4], processUptime());
-            }
-            (*next)->reset();
-            m_freeBatches.push(std::move(*next));
-            m_state.checkCancel();
+            recycleBatch(std::move(next));
         }
         if (m_error || m_state.cancel) return;
         m_state.phase = int(Phase::Finalizing);
@@ -1171,6 +1342,10 @@ private:
     ThreadPool m_pool;
     std::unique_ptr<Backend> m_backend;
     std::vector<Item> m_items;
+    std::vector<fs::path> m_outputs; // gz / lz4: output file per item
+    bool m_eachFile = false;         // gz / lz4: outputs next to their sources
+    std::map<std::uint64_t, std::unique_ptr<Batch>> m_early; // writer: finished out of order
+    std::uint64_t m_expected = 0;
     std::vector<SevenZFolderInfo> m_folders;
     std::size_t m_chunkSize = 65536;
     std::size_t m_batchSize = 0;
@@ -1189,6 +1364,7 @@ private:
     bool m_mapInputs = false;
     int m_mapShare = 60; // percent of eligible batches that are mapped (measured best 50-67)
     int m_mapCredit = 0;
+    int m_mappedBatches = 0; // reader thread only
     std::future<std::pair<std::unique_ptr<Backend>, std::string>> m_gpuInit;
     bool m_wantGpu = false;
     std::size_t m_initialOutput = 0;
@@ -1241,6 +1417,114 @@ private:
     std::mutex &m_mutex;
 };
 
+// ---------------------------------------------------------------------------
+// gz / lz4 headers
+// ---------------------------------------------------------------------------
+
+struct SingleFileInfo {
+    std::string name;            // UTF-8 file name of the content
+    std::uint64_t size = 0;
+    bool sizeKnown = false;
+    std::uint64_t mtime = 0;     // FILETIME, 0 = unknown
+    std::uint32_t crc = 0;
+    bool hasCrc = false;
+    std::uint64_t archiveSize = 0;
+};
+
+// Content name from the archive name: "a.txt.gz" -> "a.txt", "a.tgz" -> "a.tar".
+std::string contentNameFromArchive(const fs::path &archive)
+{
+    const std::string ext = lowerAscii(utf8FromPath(archive.extension()));
+    std::string stem = utf8FromPath(archive.stem());
+    if (stem.empty()) stem = "content";
+    if (ext == ".tgz") return stem + ".tar";
+    if (ext == ".gz" || ext == ".lz4") return stem;
+    return utf8FromPath(archive.filename()) + ".out";
+}
+
+SingleFileInfo readSingleFileInfo(const fs::path &archive, Format format)
+{
+    SingleFileInfo info;
+    InFile in(archive);
+    info.archiveSize = in.size();
+    info.name = contentNameFromArchive(archive);
+    std::uint8_t head[16] = {};
+    const std::size_t n = in.readSome(head, sizeof(head));
+    if (format == Format::Lz4) {
+        if (n < 7 || getLE32(head) != 0x184D2204u) throw Error("not an LZ4 file");
+        if ((head[4] & 0x08) && n >= 14) {
+            info.size = 0;
+            for (int k = 7; k >= 0; --k) info.size = (info.size << 8) | head[6 + k];
+            info.sizeKnown = true;
+        }
+        return info;
+    }
+    if (n < 10 || head[0] != 0x1F || head[1] != 0x8B || head[2] != 8) throw Error("not a gzip file");
+    const std::uint8_t flags = head[3];
+    const std::uint32_t mtime = getLE32(head + 4);
+    if (mtime) info.mtime = std::uint64_t(mtime) * 10000000ULL + kFileTimeUnixEpoch;
+    in.seek(10);
+    if (flags & 0x04) { // FEXTRA
+        std::uint8_t len[2];
+        in.readExact(len, 2);
+        std::vector<std::uint8_t> extra(len[0] | (len[1] << 8));
+        in.readExact(extra.data(), extra.size());
+        for (std::size_t p = 0; p + 4 <= extra.size();) {
+            const std::size_t sub = extra[p + 2] | (extra[p + 3] << 8);
+            if (p + 4 + sub > extra.size()) break;
+            if (extra[p] == kGzipSizeId1 && extra[p + 1] == kGzipSizeId2 && sub == 8) {
+                info.size = 0;
+                for (int k = 7; k >= 0; --k) info.size = (info.size << 8) | extra[p + 4 + k];
+                info.sizeKnown = true;
+            }
+            p += 4 + sub;
+        }
+    }
+    if (flags & 0x08) { // FNAME, ISO-8859-1; keep only the last path component
+        std::string latin;
+        for (std::uint8_t c = 0; in.readSome(&c, 1) == 1 && c;) latin.push_back(char(c));
+        std::string utf8;
+        for (unsigned char c : latin) {
+            if (c < 0x80) utf8.push_back(char(c));
+            else { utf8.push_back(char(0xC0 | (c >> 6))); utf8.push_back(char(0x80 | (c & 0x3F))); }
+        }
+        const std::size_t slash = utf8.find_last_of("/\\");
+        if (slash != std::string::npos) utf8 = utf8.substr(slash + 1);
+        // A stored name equal to the archive's own (Python's tarfile writes
+        // "x.tgz" into x.tgz) would extract over the archive.
+        const bool self = lowerAscii(utf8) == lowerAscii(utf8FromPath(archive.filename()));
+        if (!utf8.empty() && utf8 != "." && utf8 != ".." && !self) info.name = utf8;
+    }
+    // Trailer of the last member: CRC32 and size mod 4 GiB. Exact for files
+    // Vyra wrote (one member, size subfield); other files may hold several
+    // members, which the decoder checks one by one instead.
+    if (info.archiveSize >= 18) {
+        std::uint8_t tail[8];
+        in.seek(info.archiveSize - 8);
+        in.readExact(tail, 8);
+        if (info.sizeKnown) {
+            info.crc = getLE32(tail);
+            info.hasCrc = true;
+        } else {
+            info.size = getLE32(tail + 4);
+        }
+    }
+    return info;
+}
+
+Entry singleFileEntry(const SingleFileInfo &info, Format format)
+{
+    Entry e;
+    e.path = info.name;
+    e.size = info.size;
+    e.packedSize = info.archiveSize;
+    e.mtime = info.mtime;
+    e.crc = info.crc;
+    e.hasCrc = info.hasCrc;
+    e.method = format == Format::Gzip ? Method::Deflate : Method::LZ4;
+    return e;
+}
+
 bool selected(const std::string &path, const std::vector<std::string> &selection)
 {
     if (selection.empty()) return true;
@@ -1254,14 +1538,17 @@ bool selected(const std::string &path, const std::vector<std::string> &selection
 // Writes one extracted file: CRC check, size check and metadata.
 class FileSink {
 public:
-    FileSink(const Entry &entry, const fs::path &target, bool write) : m_entry(entry), m_target(target), m_write(write)
+    // checkSize: entry.size is exact (false for gzip members of unknown total
+    // size); direct: unbuffered writes for big outputs.
+    FileSink(const Entry &entry, const fs::path &target, bool write, bool checkSize = true, bool direct = false)
+        : m_entry(entry), m_target(target), m_write(write), m_checkSize(checkSize)
     {
         if (m_write) {
             std::error_code ec;
             fs::create_directories(target.parent_path(), ec);
             // Read-only files from an earlier extraction would block the overwrite.
             if (fs::exists(target, ec)) fs::permissions(target, fs::perms::owner_write, fs::perm_options::add, ec);
-            m_out.create(target);
+            m_out.create(target, direct);
         }
     }
     void write(const std::uint8_t *p, std::size_t n)
@@ -1273,7 +1560,7 @@ public:
     void finish()
     {
         if (m_write) m_out.close();
-        if (m_size != m_entry.size) throw Error("size mismatch");
+        if (m_checkSize && m_size != m_entry.size) throw Error("size mismatch");
         if (m_entry.hasCrc && m_crc != m_entry.crc) throw Error("CRC mismatch (data is corrupt)");
         if (m_write) applyFileMetadata(m_target, m_entry.mtime, m_entry.attributes, m_entry.hasAttributes);
     }
@@ -1287,6 +1574,7 @@ private:
     const Entry &m_entry;
     fs::path m_target;
     bool m_write;
+    bool m_checkSize;
     OutFile m_out;
     std::uint32_t m_crc = 0;
     std::uint64_t m_size = 0;
@@ -1302,8 +1590,11 @@ public:
         OperationResult result;
         m_state.phase = int(m_options.testOnly ? Phase::Testing : Phase::Extracting);
         result.seconds = runWithProgress(m_state, progress, [&] {
-            if (detectFormat(m_archive) == Format::Zip) extractZip();
-            else extractSevenZ();
+            switch (const Format format = detectFormat(m_archive)) {
+            case Format::Zip: extractZip(); break;
+            case Format::SevenZip: extractSevenZ(); break;
+            default: extractSingleFile(format); break;
+            }
             finishDirectories();
         });
         result.inputBytes = m_state.bytesDone;
@@ -1419,6 +1710,65 @@ private:
             sink.abandon();
             throw;
         }
+    }
+
+    // gz / lz4: one file, named after the original (gzip FNAME) or after the
+    // archive without its extension.
+    void extractSingleFile(Format format)
+    {
+        const SingleFileInfo info = readSingleFileInfo(m_archive, format);
+        Entry e = singleFileEntry(info, format);
+        if (!selected(e.path, m_options.selection)) return;
+        ++m_state.filesTotal;
+        m_state.bytesTotal += e.size;
+        fs::path out;
+        if (!prepareFile(e, out)) {
+            ++m_state.filesDone;
+            return;
+        }
+        m_state.setItem(e.path);
+        std::uint64_t remaining = info.archiveSize;
+        std::unique_ptr<Backend> backend;
+        std::unique_ptr<StreamDecoder> decoder;
+        if (format == Format::Gzip) {
+            decoder = createGzipDecoder(); // checks every member's CRC32 and size
+        } else {
+            // Independent blocks decode in parallel; the GPU only pays off for big files.
+            const BackendKind kind = remaining < (std::uint64_t(256) << 20) ? BackendKind::Cpu : m_options.backend;
+            backend = selectBackend(kind, m_pool, m_options.gpuDevice);
+            const std::size_t batch = std::size_t(std::min<std::uint64_t>(m_options.batchSize, std::max<std::uint64_t>(remaining, 1 << 16)));
+            decoder = createStreamDecoder({Method::LZ4, {}, e.size}, backend.get(), batch);
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_state.mutex);
+            m_state.backend = backend ? backend->info().name : "CPU";
+        }
+        // gzip: the decoder checks every member's CRC32 and size. The header's
+        // size and the trailer's CRC describe one member only, which is not the
+        // whole content of concatenated files ("cat a.gz b.gz > ab.gz").
+        Entry check = e;
+        if (format == Format::Gzip) check.hasCrc = false;
+        FileSink sink(check, out, !m_options.testOnly, info.sizeKnown && format != Format::Gzip,
+                      e.size >= (std::uint64_t(64) << 20));
+        InFile in(m_archive);
+        std::vector<std::uint8_t> buffer(std::size_t(std::min<std::uint64_t>(kReadPiece, std::max<std::uint64_t>(remaining, 1))));
+        try {
+            do {
+                m_state.checkCancel();
+                const std::size_t n = std::size_t(std::min<std::uint64_t>(remaining, buffer.size()));
+                in.readExact(buffer.data(), n);
+                remaining -= n;
+                decoder->feed(buffer.data(), n, remaining == 0, [&](const std::uint8_t *p, std::size_t len) {
+                    sink.write(p, len);
+                    m_state.bytesDone += len;
+                });
+            } while (remaining);
+            sink.finish();
+        } catch (...) {
+            sink.abandon();
+            throw;
+        }
+        ++m_state.filesDone;
     }
 
     void extractSevenZ()
@@ -1599,8 +1949,12 @@ private:
 
 bool methodSupportedFor(Format format, Method method)
 {
-    if (format == Format::Zip) return method == Method::Store || method == Method::Deflate;
-    return method == Method::Store || method == Method::Deflate || method == Method::LZ4 || method == Method::Zstd;
+    switch (format) {
+    case Format::Zip: return method == Method::Store || method == Method::Deflate;
+    case Format::Gzip: return method == Method::Deflate;
+    case Format::Lz4: return method == Method::LZ4;
+    default: return method == Method::Store || method == Method::Deflate || method == Method::LZ4 || method == Method::Zstd;
+    }
 }
 
 fs::path safeRelativePath(const std::string &archivePath)
@@ -1633,9 +1987,13 @@ Format detectFormat(const fs::path &archive)
     static const std::uint8_t sevenZ[6] = {'7', 'z', 0xBC, 0xAF, 0x27, 0x1C};
     if (n == 6 && std::memcmp(sig, sevenZ, 6) == 0) return Format::SevenZip;
     if (n >= 4 && sig[0] == 'P' && sig[1] == 'K') return Format::Zip;
+    if (n >= 3 && sig[0] == 0x1F && sig[1] == 0x8B && sig[2] == 8) return Format::Gzip;
+    if (n >= 4 && getLE32(sig) == 0x184D2204u) return Format::Lz4;
     const std::string ext = lowerAscii(utf8FromPath(archive.extension()));
     if (ext == ".7z") return Format::SevenZip;
     if (ext == ".zip" || ext == ".exe") return Format::Zip;
+    if (ext == ".gz" || ext == ".tgz") return Format::Gzip;
+    if (ext == ".lz4") return Format::Lz4;
     throw Error("unknown archive format: " + utf8FromPath(archive.filename()));
 }
 
@@ -1646,7 +2004,11 @@ ArchiveListing listArchive(const fs::path &archive)
     std::error_code ec;
     listing.archiveSize = fs::file_size(archive, ec);
     std::set<std::string> methods;
-    if (listing.format == Format::Zip) {
+    if (singleFileFormat(listing.format)) {
+        const SingleFileInfo info = readSingleFileInfo(archive, listing.format);
+        listing.entries.push_back(singleFileEntry(info, listing.format));
+        methods.insert(methodName(listing.entries.back().method));
+    } else if (listing.format == Format::Zip) {
         ZipReader reader;
         reader.open(archive);
         for (const ZipEntry &e : reader.entries()) {
@@ -1673,6 +2035,16 @@ OperationResult createArchive(const fs::path &archive, const std::vector<fs::pat
     if (inputs.empty()) throw Error("nothing to compress");
     SharedState state;
     Compressor compressor(archive, options, state);
+    return compressor.run(inputs, progress);
+}
+
+OperationResult compressEachFile(const std::vector<fs::path> &inputs, const CompressOptions &options,
+                                 const ProgressCallback &progress)
+{
+    if (inputs.empty()) throw Error("nothing to compress");
+    if (!singleFileFormat(options.format)) throw Error("compressEachFile needs the gz or lz4 format");
+    SharedState state;
+    Compressor compressor(fs::path(), options, state, true);
     return compressor.run(inputs, progress);
 }
 

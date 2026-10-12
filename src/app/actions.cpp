@@ -91,7 +91,30 @@ QString Actions::compressInteractive(QWidget *parent, const QStringList &inputs)
     if (inputs.isEmpty()) return {};
     CompressDialog dialog(inputs, parent);
     if (dialog.exec() != QDialog::Accepted) return {};
-    return runCompress(parent, inputs, dialog.archivePath(), dialog.options());
+    const vyra::CompressOptions options = dialog.options();
+    if (vyra::singleFileFormat(options.format)) {
+        if (!compressEach(parent, inputs, options)) return {};
+        // One file: its .gz / .lz4; otherwise the folder holding the outputs.
+        const QFileInfo first(inputs.first());
+        const QString single = first.absoluteFilePath() + u'.' + QString::fromLatin1(vyra::formatName(options.format));
+        if (inputs.size() == 1 && first.isFile() && QFileInfo(single).isFile()) return single;
+        return inputs.size() == 1 && first.isDir() ? first.absoluteFilePath() : first.absolutePath();
+    }
+    return runCompress(parent, inputs, dialog.archivePath(), options);
+}
+
+bool Actions::compressEach(QWidget *parent, const QStringList &inputs, const vyra::CompressOptions &options)
+{
+    if (inputs.isEmpty()) return false;
+    const QString title = QCoreApplication::translate("Actions", "Compressing");
+    const QString what = QCoreApplication::translate("Actions", "Each file → .%1 next to it")
+                             .arg(QString::fromLatin1(vyra::formatName(options.format)));
+    const JobOutcome outcome = ProgressDialog::run(parent, title, what,
+        [inputs, options](const vyra::ProgressCallback &progress) {
+            return vyra::compressEachFile(toPaths(inputs), options, progress);
+        });
+    reportProblems(parent, title, outcome);
+    return outcome.ok;
 }
 
 QString Actions::compressQuick(QWidget *parent, const QStringList &inputs, vyra::Format format)
@@ -144,7 +167,11 @@ bool Actions::test(QWidget *parent, const QString &archive)
 QString Actions::folderDestination(const QString &archive)
 {
     const QFileInfo info(archive);
-    return info.absoluteDir().filePath(info.completeBaseName());
+    const QString base = info.absoluteDir().filePath(info.completeBaseName());
+    // A file of that name (the original next to its .gz) cannot become the folder.
+    QString folder = base;
+    for (int i = 2; QFileInfo::exists(folder) && !QFileInfo(folder).isDir(); ++i) folder = QStringLiteral("%1 (%2)").arg(base).arg(i);
+    return folder;
 }
 
 QString Actions::smartDestination(const QString &archive)
@@ -165,6 +192,7 @@ QString Actions::smartDestination(const QString &archive)
 
 bool Actions::isArchivePath(const QString &path)
 {
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    return suffix == QStringLiteral("7z") || suffix == QStringLiteral("zip");
+    static const QStringList suffixes = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("gz"),
+                                         QStringLiteral("tgz"), QStringLiteral("lz4")};
+    return suffixes.contains(QFileInfo(path).suffix().toLower());
 }

@@ -1,6 +1,6 @@
 # Vyra
 
-**NVIDIA nvCOMP 기반 GPU 가속 압축 프로그램.** 7z / zip 압축 파일을 GPU로 만들고, 결과물은 **표준 형식 그대로**라서 다른 PC에서도 7-Zip·Windows 탐색기 등으로 바로 풀 수 있습니다. UI는 [LMDB Archiver](https://github.com/embistel/LMDBArchiver)와 같은 Qt Widgets 스타일이며, 7-Zip처럼 탐색기 오른쪽 클릭 메뉴와 통합됩니다.
+**NVIDIA nvCOMP 기반 GPU 가속 압축 프로그램.** 7z / zip 압축 파일과 .gz / .lz4 파일을 GPU(또는 CPU 전체 코어)로 만들고, 결과물은 **표준 형식 그대로**라서 다른 PC에서도 7-Zip·Windows 탐색기·gzip 등으로 바로 풀 수 있습니다. UI는 [LMDB Archiver](https://github.com/embistel/LMDBArchiver)와 같은 Qt Widgets 스타일이며, 7-Zip처럼 탐색기 오른쪽 클릭 메뉴와 통합됩니다.
 
 [English](README.md)
 
@@ -15,10 +15,12 @@
   | `.zip` (Deflate / 저장) | Windows 탐색기, 7-Zip, 반디집 등 모든 ZIP 프로그램 |
   | `.7z` Deflate / 저장 | **공식 7-Zip**, NanaZip 등 |
   | `.7z` LZ4 / Zstd | NanaZip, 7-Zip-zstd, 공식 7-Zip + [코덱 플러그인](https://github.com/mcmilk/7-Zip-zstd/releases)(`Codecs\lz4.dll`, `zstd.dll`) |
+  | `.gz` (gzip, 파일마다 하나) | 7-Zip, 반디집, WinRAR, gzip과 모든 Unix 도구, Python |
+  | `.lz4` (LZ4 프레임, 파일마다 하나) | `lz4` 도구, 7-Zip-zstd, NanaZip, python-lz4 |
 
-  > 공식 7-Zip은 LZ4/Zstd 방식을 기본 내장하지 않습니다. "어느 PC에서나 7-Zip으로" 풀려야 한다면 **7z + Deflate** 또는 **zip**을 고르세요 (압축 대화상자에 호환성 안내가 표시됩니다).
-- **해제/테스트**: Vyra가 만든 파일뿐 아니라 일반 7-Zip 압축 파일(LZMA, LZMA2, BCJ, 압축된 헤더), 일반 ZIP(Deflate, Zstd)도 풀 수 있습니다. LZ4/Zstd 7z는 블록 단위 병렬(GPU 또는 CPU)로 풉니다. 모든 파일의 CRC를 검증합니다.
-- **탐색기 통합 (관리자 권한 불필요)**: 파일·폴더 우클릭 → *Vyra ▸ 압축하기… / 7z로 빠르게 압축 (GPU) / ZIP으로 압축*, `.7z`·`.zip` 우클릭 → *Vyra 압축 풀기 ▸ Vyra로 열기 / 여기에 풀기 / 폴더를 만들어 풀기 / 압축 풀기… / 테스트*. 여러 파일을 선택해도 하나의 압축 파일로 묶습니다.
+  > 공식 7-Zip은 LZ4/Zstd 방식을 기본 내장하지 않습니다. "어느 PC에서나 7-Zip으로" 풀려야 한다면 **7z + Deflate**, **zip** 또는 **gz**를 고르세요 (압축 대화상자에 호환성 안내가 표시됩니다). 코덱 플러그인은 `.7z` 안의 LZ4/Zstd만 추가하므로, 단독 `.lz4` 파일은 7-Zip-zstd, NanaZip, `lz4` 도구로 엽니다.
+- **해제/테스트**: Vyra가 만든 파일뿐 아니라 일반 7-Zip 압축 파일(LZMA, LZMA2, BCJ, 압축된 헤더), 일반 ZIP(Deflate, Zstd), 모든 gzip 파일(여러 멤버, `.tgz` → `.tar`), 모든 LZ4 프레임 파일(연결 블록, 블록/콘텐츠 체크섬)도 풀 수 있습니다. LZ4/Zstd는 블록 단위 병렬(GPU 또는 CPU)로 풉니다. 모든 CRC와 체크섬을 검증합니다. Vyra가 만든 `.lz4`에는 체크섬이 없으므로(`lz4 --no-frame-crc`와 같음) 테스트는 기록된 크기대로 풀리는지를 확인합니다.
+- **탐색기 통합 (관리자 권한 불필요)**: 파일·폴더 우클릭 → *Vyra ▸ 압축하기… / 7z로 빠르게 압축 (GPU) / ZIP으로 압축 / 각 파일을 .gz로 압축 / 각 파일을 .lz4로 압축*, `.7z`·`.zip`·`.gz`·`.tgz`·`.lz4` 우클릭 → *Vyra 압축 풀기 ▸ Vyra로 열기 / 여기에 풀기 / 폴더를 만들어 풀기 / 압축 풀기… / 테스트*. 여러 파일을 선택해도 하나의 압축 파일로 묶고, gz / lz4는 파일마다 옆에 `<파일>.gz` / `<파일>.lz4`를 만듭니다(폴더는 안의 모든 파일, 원본 유지). 이전 버전이 설치한 메뉴는 Vyra를 다음에 실행할 때 자동으로 갱신됩니다.
 - **스마트 "여기에 풀기"**: 최상위 항목이 하나면 그 자리에, 여러 개면 압축 파일 이름의 폴더를 만들어 풉니다.
 - 드래그 앤 드롭(넣으면 압축/열기, 끌어내면 추출), 진행률 창(속도·남은 시간·압축률·엔진), 한국어/영어 UI, CLI(`vyra-cli`).
 
@@ -40,6 +42,7 @@
 - **Zstd (7z)**: 청크마다 완결된 Zstd 프레임이 이어진 스트림(Zstd 표준이 허용하는 다중 프레임)입니다.
 - 7z 메서드 ID는 7-Zip-zstd가 등록한 값(LZ4 `04F71104`, Zstd `04F71101`)을 사용합니다.
 - 큰 입력은 솔리드 블록(기본 4 GiB) 단위로 나눠 7z 폴더를 만들고, zip은 ZIP64를 자동 사용합니다.
+- **gz / lz4 파일**은 파일 하나씩을 담아 원본 옆에 씁니다(`gzip -k`처럼). 출력이 이미 있거나 이미 `.gz`/`.tgz`/`.lz4`인 파일은 경고 후 건너뜁니다. `.gz`는 gzip 멤버 하나입니다: 이름(ASCII 이름일 때)과 시각, 64비트 원본 크기를 담은 extra 필드 `Vy`가 있는 헤더, 결합된 Deflate 스트림, CRC32와 크기. `.lz4`는 독립 블록과 콘텐츠 크기를 담은 LZ4 프레임 하나입니다.
 
 ## 성능 (v0.2 실측)
 
@@ -65,6 +68,17 @@
 - 압축 후 크기는 7-Zip LZMA2보다 큽니다(27.6% / 18.2% 대 12.2%). 속도를 위해 압축률을 양보한 설계입니다. 같은 속도로 더 작게 만들려면 Zstd를 쓰세요.
 - 같은 PC의 다른 프로그램 부하가 있는 상태에서 측정했습니다. 기본 설정의 라운드별 배율은 4.7–5.6배였습니다.
 
+**gz와 lz4, 4.45 GiB 단일 파일** (위 파일 + 그 앞 512 MiB, gzip 크기 필드가 4 GiB를 넘어 한 바퀴 돎. 각 2회, 7-Zip은 1회):
+
+| 도구 / 설정 | 시간 | 속도 | 압축 후 크기 |
+|---|---|---|---|
+| 7-Zip 26.02 `7z a -tgzip -mx1` (7-Zip의 gzip은 단일 스레드) | 99.95 s | 0.045 GiB/s | 17.8% |
+| **Vyra `.gz`** (자동 → CPU) | **2.04–2.32 s** | **1.9–2.2 GiB/s** | 24.8% |
+| Vyra `.gz`, GPU 강제 | 3.53–4.31 s | 1.0–1.3 GiB/s | 25.1–25.2% |
+| **Vyra `.lz4`** (자동 → CPU) | **1.69–1.75 s** | **2.5–2.6 GiB/s** | 28.1% |
+
+Vyra의 gzip은 7-Zip보다 **43–49배** 빠릅니다. 7-Zip은 더 느린 Deflate 탐색으로 더 작게 만듭니다. 풀 때는 `.gz`는 직렬로 약 550 MiB/s(gzip에는 블록 색인이 없음), `.lz4`는 병렬로 약 1 GiB/s입니다.
+
 ## 사용법
 
 ### GUI
@@ -76,6 +90,9 @@ vyra-cli a backup.7z D:\Photos D:\Docs          # 7z + LZ4 (GPU)
 vyra-cli a backup.7z D:\Data -m zstd             # 7z + Zstd
 vyra-cli a share.zip D:\Data                     # zip + Deflate (어디서나 열림)
 vyra-cli a backup.7z D:\Data -m deflate          # 공식 7-Zip 호환 7z
+vyra-cli gz D:\Logs                              # 모든 파일 -> 옆에 file.gz (gzip -k -r)
+vyra-cli lz4 D:\Dumps\big.bin                    # -> big.bin.lz4
+vyra-cli a data.tar.gz data.tar                  # 파일 하나를 지정한 .gz / .tgz / .lz4로
 vyra-cli x backup.7z -o D:\Restore               # 풀기 (일부만: 경로 나열)
 vyra-cli t backup.7z                             # 무결성 테스트
 vyra-cli l backup.7z                             # 목록
@@ -97,14 +114,15 @@ vyra-cli bench D:\Data                           # 디스크 제외 처리량 �
 
 zlib-ng · LZ4 · Zstandard · LZMA SDK는 CMake가 자동으로 받아 정적으로 링크합니다. `nvcomp64_5.dll`은 지연 로드되므로 DLL이나 NVIDIA 드라이버가 없어도 프로그램은 CPU 모드로 실행됩니다.
 
-테스트: `vyra_tests`(형식 × 방식 × CPU / GPU / CPU+GPU 혼합 × 배치 크기 왕복, GPU 프레이밍과 Deflate 끝 비트 빠른 경로 교차 검증, Deflate 결합, 경로 안전성, 취소)와 `interop_test.py`(Python zipfile, 공식 7-Zip과 양방향 호환). 자세한 구조는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+테스트: `vyra_tests`(형식 × 방식 × CPU / GPU / CPU+GPU 혼합 × 배치 크기 왕복, gz / lz4 파일별 출력과 건너뛰기 규칙, 이어 붙인 gzip, GPU 프레이밍과 Deflate 끝 비트 빠른 경로 교차 검증, Deflate 결합, 경로 안전성, 취소)와 `interop_test.py`(Python zipfile / gzip / tarfile, 표준 라이브러리만 쓰는 엄격한 LZ4 프레임 디코더, 공식 7-Zip과 양방향 호환). 자세한 구조는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 로드맵
 
 - GPU 엔진: 작업 사이에 CUDA 컨텍스트와 버퍼 유지(한 번 실행하는 작업에서 GPU의 가장 큰 불리함은 시작 비용), page-lock 비용 없이 큰 배치
 - **Intel / AMD 내장 그래픽 가속**: `Backend` 인터페이스에 Vulkan compute 또는 oneAPI/OpenCL 백엔드 추가
 - MSI 설치 프로그램(WiX, LMDB Archiver와 동일한 구성), Windows 11 최상위 메뉴(IExplorerCommand)
-- Vyra가 만든 Deflate 압축의 GPU 병렬 해제(청크 인덱스), 압축 파일 편집(추가/삭제), 암호화(AES-256), 분할 압축
+- Vyra가 만든 Deflate 압축과 `.gz`의 GPU 병렬 해제(청크 인덱스), 압축 파일 편집(추가/삭제), 암호화(AES-256), 분할 압축
+- `.lz4` 콘텐츠 체크섬 옵션(순차 xxHash 계산 필요)
 
 ## 라이선스
 

@@ -54,5 +54,5 @@ void DropView::paintEvent(QPaintEvent *event)
     font.setPointSizeF(font.pointSizeF() + 1.5);
     painter.setFont(font);
     painter.drawText(viewport()->rect().adjusted(24, 24, -24, -24), Qt::AlignCenter | Qt::TextWordWrap,
-                     tr("Drop files or folders here to compress them\nor drop a .7z / .zip archive to open it."));
+                     tr("Drop files or folders here to compress them\nor drop a .7z / .zip / .gz / .lz4 file to open it."));
 }

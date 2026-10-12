@@ -1,5 +1,6 @@
-// Core round-trip tests: every format x method x backend, plus the Deflate
-// joiner, path safety and cancellation. Usage: vyra_tests <work-dir>
+// Core round-trip tests: every format x method x backend (gz / lz4: one
+// output per file), plus the Deflate joiner, path safety and cancellation.
+// Usage: vyra_tests <work-dir>
 #include "core/archive.h"
 #include "core/backend.h"
 #include "core/crc32.h"
@@ -227,6 +228,199 @@ void testRoundTrip(const fs::path &work, const fs::path &fixture, Format format,
     }
 }
 
+// Extracts a gz / lz4 file into `dest` and returns the one file it holds.
+std::vector<std::uint8_t> extractSingle(const fs::path &packed, const fs::path &dest, BackendKind backend, std::string *name = nullptr)
+{
+    fs::remove_all(dest);
+    ExtractOptions x;
+    x.backend = backend;
+    const OperationResult r = extractArchive(packed, dest, x);
+    CHECK(r.warnings.empty());
+    CHECK(r.files == 1);
+    for (const auto &w : r.warnings) std::cerr << "  warning: " << w << "\n";
+    for (const auto &entry : fs::directory_iterator(dest)) {
+        if (name) *name = entry.path().filename().u8string();
+        return readFile(entry.path());
+    }
+    return {};
+}
+
+// gz / lz4: compressEachFile writes <file>.gz / <file>.lz4 next to every file
+// (originals kept; an existing output and an already compressed file are
+// skipped); each output decodes back to its file, under its name. Then one
+// explicit output (createArchive) and its one-file rule.
+void testEachFile(const fs::path &work, const fs::path &fixture, Format format, BackendKind backend, std::size_t batch,
+                  const std::string &tag)
+{
+    const std::string ext = std::string(".") + formatName(format);
+    const std::string name = std::string(formatName(format)) + "-each-" + tag + "-b" + std::to_string(batch >> 10);
+    const fs::path tree = work / (name + "-tree");
+    fs::remove_all(tree);
+    fs::copy(fixture, tree, fs::copy_options::recursive);
+    const std::string conflict = "sub/exact64k.bin";
+    const bool hasConflict = fs::exists(tree / conflict);
+    if (hasConflict) writeFile(tree / fs::u8path(conflict + ext), {'k', 'e', 'e', 'p'});
+    const auto before = snapshot(tree);
+    CompressOptions o;
+    o.format = format;
+    o.method = format == Format::Gzip ? Method::Deflate : Method::LZ4;
+    o.backend = backend;
+    o.batchSize = batch;
+    try {
+        const OperationResult r = compressEachFile({tree}, o);
+        CHECK(r.warnings.size() == (hasConflict ? 2u : 0u));
+        for (const auto &w : r.warnings)
+            if (!hasConflict) std::cerr << "  warning: " << w << "\n";
+        const auto after = snapshot(tree);
+        std::uint64_t outputs = 0;
+        for (const auto &[path, data] : before) {
+            const auto kept = after.find(path);
+            CHECK(kept != after.end() && kept->second == data); // originals stay
+            const bool directory = data == std::vector<std::uint8_t>{'<', 'd', 'i', 'r', '>'};
+            if (directory || (path.size() > ext.size() && path.compare(path.size() - ext.size(), ext.size(), ext) == 0)) continue;
+            const fs::path packed = tree / fs::u8path(path + ext);
+            if (hasConflict && path == conflict) {
+                CHECK(readFile(packed) == std::vector<std::uint8_t>({'k', 'e', 'e', 'p'}));
+                continue;
+            }
+            ++outputs;
+            if (!fs::exists(packed)) {
+                ++g_failures;
+                std::cerr << "FAIL " << name << ": no output for " << path << "\n";
+                continue;
+            }
+            const ArchiveListing listing = listArchive(packed);
+            CHECK(listing.format == format && listing.entries.size() == 1);
+            if (!listing.entries.empty()) CHECK(listing.entries[0].size == data.size());
+            std::string extracted;
+            const auto decoded = extractSingle(packed, work / (name + "-out"), backend, &extracted);
+            if (decoded != data) std::cerr << "  " << name << ": " << path << " differs\n";
+            CHECK(decoded == data);
+            CHECK(extracted == fs::u8path(path).filename().u8string());
+            ExtractOptions t;
+            t.testOnly = true;
+            CHECK(extractArchive(packed, {}, t).warnings.empty());
+        }
+        CHECK(r.files == outputs);
+        CHECK(after.size() == before.size() + outputs);
+
+        // One explicit output; more than one file is refused.
+        const fs::path single = work / (name + "-single" + ext);
+        fs::path source;
+        for (const auto &[path, data] : before)
+            if (data.size() > 1000 && path.find(ext) == std::string::npos) source = tree / fs::u8path(path);
+        createArchive(single, {source}, o);
+        CHECK(extractSingle(single, work / (name + "-out"), backend) == readFile(source));
+        const fs::path two = work / (name + "-two" + ext);
+        bool refused = false;
+        try {
+            createArchive(two, {tree}, o);
+        } catch (const std::exception &) {
+            refused = true;
+        }
+        CHECK(refused || before.size() < 2);
+        CHECK(!fs::exists(two));
+        std::cout << "ok   " << name << "\n";
+    } catch (const std::exception &e) {
+        ++g_failures;
+        std::cerr << "FAIL " << name << ": " << e.what() << "\n";
+    }
+}
+
+// Concatenated gzip files ("cat a.gz b.gz > ab.gz", trailing zeros) hold
+// the contents one after the other.
+void testGzipConcatenation(const fs::path &work, const fs::path &fixture)
+{
+    CompressOptions o;
+    o.format = Format::Gzip;
+    o.method = Method::Deflate;
+    o.backend = BackendKind::Cpu;
+    const fs::path a = work / "concat-a.gz", b = work / "concat-b.gz", ab = work / "concat-ab.gz";
+    try {
+        createArchive(a, {fixture / "text.txt"}, o);
+        createArchive(b, {fixture / "sub" / "multi.bin"}, o);
+        auto joined = readFile(a);
+        const auto second = readFile(b);
+        joined.insert(joined.end(), second.begin(), second.end());
+        joined.insert(joined.end(), 512, 0);
+        writeFile(ab, joined);
+        auto expected = readFile(fixture / "text.txt");
+        const auto tail = readFile(fixture / "sub" / "multi.bin");
+        expected.insert(expected.end(), tail.begin(), tail.end());
+        CHECK(extractSingle(ab, work / "concat-out", BackendKind::Cpu) == expected);
+        // A damaged member is reported.
+        joined[joined.size() - 512 - 6] ^= 0x55; // inside the second member's CRC32
+        writeFile(ab, joined);
+        bool failed = false;
+        try {
+            ExtractOptions t;
+            t.testOnly = true;
+            failed = !extractArchive(ab, {}, t).warnings.empty();
+        } catch (const std::exception &) {
+            failed = true;
+        }
+        CHECK(failed);
+        std::cout << "ok   gz concatenation\n";
+    } catch (const std::exception &e) {
+        ++g_failures;
+        std::cerr << "FAIL gz concatenation: " << e.what() << "\n";
+    }
+}
+
+// Cancelling gz / lz4 while files are written leaves complete outputs only:
+// files finished before the cancel stay (like gzip), the one in progress
+// leaves no partial file. Where a cancel lands is timing dependent, so
+// several cancel points are tried.
+void testEachFileCancel(const fs::path &work)
+{
+    const fs::path tree = work / "cancel-each";
+    fs::remove_all(tree);
+    fs::create_directories(tree);
+    const auto block = randomBytes(1u << 20, 31); // repeats beyond any match window
+    for (int k = 0; k < 3; ++k) {
+        std::ofstream f(tree / ("part" + std::to_string(k) + ".bin"), std::ios::binary);
+        for (int i = 0; i < 32; ++i) f.write(reinterpret_cast<const char *>(block.data()), std::streamsize(block.size()));
+    }
+    for (Format format : {Format::Gzip, Format::Lz4}) {
+        const std::string ext = std::string(".") + formatName(format);
+        int cancelledRuns = 0, kept = 0;
+        for (int point = 1; point <= 3; ++point) {
+            for (int k = 0; k < 3; ++k) fs::remove(tree / ("part" + std::to_string(k) + ".bin" + ext));
+            CompressOptions o;
+            o.format = format;
+            o.method = format == Format::Gzip ? Method::Deflate : Method::LZ4;
+            o.backend = BackendKind::Cpu;
+            o.threads = 2; // slow enough for progress ticks to land inside the job
+            o.batchSize = 4u << 20;
+            try {
+                compressEachFile({tree}, o, [point](const Progress &p) {
+                    return p.bytesTotal == 0 || p.bytesDone * 4 < p.bytesTotal * std::uint64_t(point);
+                });
+            } catch (const Cancelled &) {
+                ++cancelledRuns;
+            } catch (const std::exception &e) {
+                ++g_failures;
+                std::cerr << "FAIL cancel " << formatName(format) << ": " << e.what() << "\n";
+            }
+            for (const auto &entry : fs::directory_iterator(tree)) {
+                const std::string name = entry.path().filename().u8string();
+                if (name.find(".vyra-partial") != std::string::npos) {
+                    ++g_failures;
+                    std::cerr << "FAIL cancel " << formatName(format) << ": partial output " << name << " left\n";
+                }
+            }
+            for (int k = 0; k < 3; ++k) {
+                const fs::path packed = tree / ("part" + std::to_string(k) + ".bin" + ext);
+                if (!fs::exists(packed)) continue;
+                ++kept;
+                CHECK(extractSingle(packed, work / "cancel-out", BackendKind::Cpu) == readFile(tree / ("part" + std::to_string(k) + ".bin")));
+            }
+        }
+        std::cout << "ok   " << formatName(format) << " cancel (" << cancelledRuns << "/3 cancelled, " << kept
+                  << " complete outputs kept, no partial file)\n";
+    }
+}
+
 void testSelectionAndCancel(const fs::path &work, const fs::path &fixture)
 {
     const fs::path archive = work / "select.7z";
@@ -308,8 +502,30 @@ int main(int argc, char **argv)
             testRoundTrip(work, fixture, Format::SevenZip, Method::Zstd, p.backend, batch, p.tag);
             testRoundTrip(work, fixture, Format::SevenZip, Method::Deflate, p.backend, batch, p.tag);
             testRoundTrip(work, fixture, Format::SevenZip, Method::Store, p.backend, batch, p.tag);
+            testEachFile(work, fixture, Format::Gzip, p.backend, batch, p.tag);
+            testEachFile(work, fixture, Format::Lz4, p.backend, batch, p.tag);
         }
     }
+    // Big single file, small CPU batches: exercises the mapped-input path
+    // (batches of one file >= 4 MiB, mixed with copied ones), asynchronous
+    // unmapping and multi-block direct writes (archives > 16 MiB).
+    const fs::path large = work / "large";
+    fs::remove_all(large);
+    {
+        auto data = textLike(32u << 20, 21);
+        const auto noise = randomBytes(16u << 20, 22);
+        data.insert(data.end(), noise.begin(), noise.end());
+        writeFile(large / "big48.bin", data);
+    }
+    setEnv("VYRA_HYBRID", "2");
+    for (Method method : {Method::LZ4, Method::Zstd, Method::Deflate})
+        testRoundTrip(work, large, Format::SevenZip, method, BackendKind::Cpu, std::size_t(8) << 20, "cpu-mapped");
+    testRoundTrip(work, large, Format::Zip, Method::Deflate, BackendKind::Cpu, std::size_t(8) << 20, "cpu-mapped");
+    testEachFile(work, large, Format::Gzip, BackendKind::Cpu, std::size_t(8) << 20, "cpu-mapped");
+    testEachFile(work, large, Format::Lz4, BackendKind::Cpu, std::size_t(8) << 20, "cpu-mapped");
+    testGzipConcatenation(work, fixture);
+    testEachFileCancel(work);
+
     testSelectionAndCancel(work, fixture);
     if (g_failures) {
         std::cerr << g_failures << " failure(s)\n";

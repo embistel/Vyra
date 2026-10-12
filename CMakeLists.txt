@@ -224,6 +224,7 @@ if(VYRA_BUILD_GUI)
         TS_FILES translations/app_ko.ts
         SOURCES src/app/actions.cpp src/app/app.cpp src/app/archivemodel.cpp src/app/compressdialog.cpp
                 src/app/dropview.cpp src/app/mainwindow.cpp src/app/progressdialog.cpp
+        LUPDATE_OPTIONS -no-obsolete
         QM_FILES_OUTPUT_VARIABLE ko_qm_files)
     add_dependencies(Vyra Vyra_lrelease)
     vyra_copy_runtime(Vyra)

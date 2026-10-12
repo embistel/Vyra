@@ -10,13 +10,21 @@
 namespace {
 const QString kClasses = QStringLiteral("Software\\Classes\\");
 const QString kProgId = QStringLiteral("Vyra.Archive");
-const QStringList kArchiveExtensions = {QStringLiteral(".7z"), QStringLiteral(".zip")};
+// Version of the verbs and file types below; bump it when they change so
+// isOutdated() lets existing installs pick the change up.
+const QString kLayoutValue = QStringLiteral("VyraLayout");
+constexpr int kLayout = 2; // 2: gz / tgz / lz4
+const QStringList kArchiveExtensions = {QStringLiteral(".7z"), QStringLiteral(".zip"), QStringLiteral(".gz"),
+                                        QStringLiteral(".tgz"), QStringLiteral(".lz4")};
 // Keys owned by Vyra (removed on uninstall), relative to Software\Classes.
 const QStringList kOwnedKeys = {
     QStringLiteral("*\\shell\\Vyra"),
     QStringLiteral("Directory\\shell\\Vyra"),
     QStringLiteral("SystemFileAssociations\\.7z\\shell\\VyraExtract"),
     QStringLiteral("SystemFileAssociations\\.zip\\shell\\VyraExtract"),
+    QStringLiteral("SystemFileAssociations\\.gz\\shell\\VyraExtract"),
+    QStringLiteral("SystemFileAssociations\\.tgz\\shell\\VyraExtract"),
+    QStringLiteral("SystemFileAssociations\\.lz4\\shell\\VyraExtract"),
     QStringLiteral("Vyra.Archive"),
     QStringLiteral("Applications\\Vyra.exe"),
 };
@@ -56,6 +64,18 @@ bool removeValue(const QString &subkey, const QString &name)
     RegDeleteValueW(key, reinterpret_cast<LPCWSTR>(name.utf16()));
     RegCloseKey(key);
     return true;
+}
+
+QString readValue(const QString &subkey, const QString &name)
+{
+    const QString path = kClasses + subkey;
+    wchar_t buffer[2048];
+    DWORD size = sizeof(buffer);
+    if (RegGetValueW(HKEY_CURRENT_USER, reinterpret_cast<LPCWSTR>(path.utf16()),
+                     name.isEmpty() ? nullptr : reinterpret_cast<LPCWSTR>(name.utf16()), RRF_RT_REG_SZ, nullptr, buffer,
+                     &size) != ERROR_SUCCESS)
+        return {};
+    return QString::fromWCharArray(buffer);
 }
 
 bool keyExists(HKEY root, const QString &subkey)
@@ -103,6 +123,10 @@ bool ShellIntegration::install(const QString &executable, bool korean, QString *
         {QStringLiteral("10compress"), t("Compress...", "압축하기..."), QStringLiteral("--compress \"%1\"")},
         {QStringLiteral("20add7z"), t("Fast compress to .7z (GPU)", "7z로 빠르게 압축 (GPU)"), QStringLiteral("--add-7z \"%1\"")},
         {QStringLiteral("30addzip"), t("Compress to .zip", "ZIP으로 압축"), QStringLiteral("--add-zip \"%1\"")},
+        // gz / lz4 hold one file: every selected file (folders: every file
+        // inside) gets its own .gz / .lz4 next to it.
+        {QStringLiteral("40addgz"), t("Compress each file to .gz", "각 파일을 .gz로 압축"), QStringLiteral("--add-gz \"%1\"")},
+        {QStringLiteral("50addlz4"), t("Compress each file to .lz4", "각 파일을 .lz4로 압축"), QStringLiteral("--add-lz4 \"%1\"")},
     };
     const QList<Verb> extractVerbs = {
         {QStringLiteral("10open"), t("Open with Vyra", "Vyra로 열기"), QStringLiteral("\"%1\"")},
@@ -114,6 +138,7 @@ bool ShellIntegration::install(const QString &executable, bool korean, QString *
     bool ok = true;
     ok &= addCascade(QStringLiteral("*\\shell\\Vyra"), QStringLiteral("Vyra"), appIcon, compressVerbs, quoted, error);
     ok &= addCascade(QStringLiteral("Directory\\shell\\Vyra"), QStringLiteral("Vyra"), appIcon, compressVerbs, quoted, error);
+    ok &= setValue(QStringLiteral("*\\shell\\Vyra"), kLayoutValue, QString::number(kLayout), error);
     for (const QString &ext : kArchiveExtensions) {
         ok &= addCascade(QStringLiteral("SystemFileAssociations\\") + ext + QStringLiteral("\\shell\\VyraExtract"),
                          t("Vyra Extract", "Vyra 압축 풀기"), archiveIcon, extractVerbs, quoted, error);
@@ -143,6 +168,13 @@ bool ShellIntegration::uninstall(QString *error)
 bool ShellIntegration::isInstalled() { return keyExists(HKEY_CURRENT_USER, QStringLiteral("*\\shell\\Vyra")); }
 bool ShellIntegration::isMachineInstalled() { return keyExists(HKEY_LOCAL_MACHINE, QStringLiteral("*\\shell\\Vyra")); }
 
+bool ShellIntegration::isOutdated(const QString &executable)
+{
+    if (!isInstalled() || readValue(QStringLiteral("*\\shell\\Vyra"), kLayoutValue) == QString::number(kLayout)) return false;
+    const QString command = readValue(QStringLiteral("*\\shell\\Vyra\\shell\\10compress\\command"), {});
+    return command.startsWith(u'"' + QDir::toNativeSeparators(executable) + u'"', Qt::CaseInsensitive);
+}
+
 #else
 bool ShellIntegration::install(const QString &, bool, QString *error)
 {
@@ -156,4 +188,5 @@ bool ShellIntegration::uninstall(QString *error)
 }
 bool ShellIntegration::isInstalled() { return false; }
 bool ShellIntegration::isMachineInstalled() { return false; }
+bool ShellIntegration::isOutdated(const QString &) { return false; }
 #endif

@@ -72,6 +72,14 @@ struct ArchiveListing {
 OperationResult createArchive(const fs::path &archive, const std::vector<fs::path> &inputs,
                               const CompressOptions &options, const ProgressCallback &progress = {});
 
+// gz / lz4: compresses every file of `inputs` (folders recursively) to
+// <file>.gz / <file>.lz4 next to it, keeping the original, like `gzip -k -r`.
+// Files that already have that extension and outputs that already exist are
+// skipped with a warning. (createArchive with these formats writes a single
+// file to the given path.)
+OperationResult compressEachFile(const std::vector<fs::path> &inputs, const CompressOptions &options,
+                                 const ProgressCallback &progress = {});
+
 Format detectFormat(const fs::path &archive);
 ArchiveListing listArchive(const fs::path &archive);
 

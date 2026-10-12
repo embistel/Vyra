@@ -10,7 +10,13 @@ namespace vyra {
 
 const char *formatName(Format format)
 {
-    return format == Format::Zip ? "zip" : "7z";
+    switch (format) {
+    case Format::Zip: return "zip";
+    case Format::SevenZip: return "7z";
+    case Format::Gzip: return "gz";
+    case Format::Lz4: return "lz4";
+    }
+    return "7z";
 }
 
 const char *methodName(Method method)

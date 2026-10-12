@@ -165,7 +165,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     toolbar->addSeparator();
     toolbar->addActions({m_extractAction, m_extractAllAction, m_testAction, m_propertiesAction});
 
-    m_summary = new QLabel(tr("Drag files here to compress, or open a .7z / .zip archive."), this);
+    m_summary = new QLabel(tr("Drag files here to compress, or open a .7z / .zip / .gz / .lz4 file."), this);
     statusBar()->addWidget(m_summary, 1);
 
     connect(compressAction, &QAction::triggered, this, &MainWindow::compressFiles);
@@ -252,6 +252,10 @@ void MainWindow::compress(const QStringList &inputs)
 {
     const QString created = Actions::compressInteractive(this, inputs);
     if (created.isEmpty()) return;
+    if (QFileInfo(created).isDir()) { // gz / lz4 of several files
+        statusBar()->showMessage(tr("Compressed each file next to the original in %1").arg(QDir::toNativeSeparators(created)), 6000);
+        return;
+    }
     statusBar()->showMessage(tr("Created %1").arg(QDir::toNativeSeparators(created)), 6000);
     openArchive(created);
 }
@@ -271,7 +275,7 @@ void MainWindow::compressFolder()
 void MainWindow::chooseArchive()
 {
     const QString path = QFileDialog::getOpenFileName(this, tr("Open Archive"), QFileInfo(m_archivePath).absolutePath(),
-                                                      tr("Archives (*.7z *.zip);;All files (*.*)"));
+                                                      tr("Archives (*.7z *.zip *.gz *.tgz *.lz4);;All files (*.*)"));
     if (!path.isEmpty()) openArchive(path);
 }
 
@@ -453,8 +457,8 @@ void MainWindow::configureShell()
         }
     } else if (QMessageBox::question(this, tr("Windows Explorer Integration"),
                    tr("Add Vyra to the Explorer right-click menu for the current user?\n\n"
-                      "• Files and folders: Compress…, Fast compress to .7z, Compress to .zip\n"
-                      "• .7z / .zip files: Open, Extract Here, Extract to Folder, Test\n\n"
+                      "• Files and folders: Compress…, Fast compress to .7z, Compress to .zip, Compress each file to .gz / .lz4\n"
+                      "• .7z / .zip / .gz / .lz4 files: Open, Extract Here, Extract to Folder, Test\n\n"
                       "No administrator rights are needed. On Windows 11 the entries appear under \"Show more options\".")) == QMessageBox::Yes) {
         if (!ShellIntegration::install(QCoreApplication::applicationFilePath(), korean, &error)) showError(error);
         else QMessageBox::information(this, tr("Done"), tr("Explorer integration installed."));
@@ -478,7 +482,7 @@ void MainWindow::showAbout()
 {
     const vyra::GpuStatus gpu = vyra::queryGpu();
     QMessageBox::about(this, tr("About Vyra"),
-        tr("<h2>Vyra %1</h2><p>GPU accelerated 7z / zip archiver built on NVIDIA nvCOMP.</p>"
+        tr("<h2>Vyra %1</h2><p>GPU accelerated 7z / zip / gz / lz4 archiver built on NVIDIA nvCOMP.</p>"
            "<p>Engine: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT License</p>")
             .arg(QStringLiteral(VYRA_VERSION), fromUtf8(gpu.available ? gpu.description : "CPU (" + gpu.description + ")"),
                  QString::fromLatin1(qVersion())));

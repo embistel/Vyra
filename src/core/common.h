@@ -20,7 +20,11 @@ public:
     Cancelled() : Error("operation cancelled") {}
 };
 
-enum class Format { Zip, SevenZip };
+// Zip and 7z hold many files; gz (gzip) and lz4 (LZ4 frame) hold exactly
+// one file each, like the gzip and lz4 command-line tools.
+enum class Format { Zip, SevenZip, Gzip, Lz4 };
+
+inline bool singleFileFormat(Format format) { return format == Format::Gzip || format == Format::Lz4; }
 
 // Coding methods. Store/Deflate/LZ4/Zstd can be written; the rest are only
 // decoded (or merely listed) when reading archives made by other tools.

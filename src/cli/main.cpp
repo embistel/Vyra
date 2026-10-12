@@ -66,16 +66,19 @@ Method parseMethod(const std::string &name)
 void usage()
 {
     std::cout <<
-        "Vyra " VYRA_VERSION " — GPU accelerated zip/7z archiver (nvCOMP)\n\n"
+        "Vyra " VYRA_VERSION " — GPU accelerated zip / 7z / gz / lz4 archiver (nvCOMP)\n\n"
         "Usage:\n"
         "  vyra-cli a <archive.7z|archive.zip> <files/folders...> [options]   create\n"
+        "  vyra-cli a <file.gz|file.lz4> <one file> [options]                compress one file\n"
+        "  vyra-cli gz <files/folders...> [options]                          each file -> file.gz next to it\n"
+        "  vyra-cli lz4 <files/folders...> [options]                         each file -> file.lz4 next to it\n"
         "  vyra-cli x <archive> [-o <dir>] [paths...] [options]              extract with paths\n"
         "  vyra-cli t <archive> [options]                                    test integrity\n"
         "  vyra-cli l <archive>                                              list\n"
         "  vyra-cli info                                                     GPU / backend status\n"
         "  vyra-cli bench <files/folders...> [options]                       throughput without disk writes\n\n"
         "Options:\n"
-        "  -m <lz4|zstd|deflate|store>  method (7z default: lz4, zip: deflate)\n"
+        "  -m <lz4|zstd|deflate|store>  method (7z default: lz4, zip and gz: deflate, lz4: lz4)\n"
         "  -l <0-5>                     level: 0 fastest .. 5 best (default 1)\n"
         "  --gpu | --cpu                force backend (default: GPU when available)\n"
         "  --device <n>                 CUDA device index\n"
@@ -89,7 +92,9 @@ void usage()
         "Compatibility:\n"
         "  .zip (Deflate)  -> Windows Explorer, 7-Zip, any unzip\n"
         "  .7z  Deflate    -> official 7-Zip\n"
-        "  .7z  LZ4 / Zstd -> 7-Zip-zstd, NanaZip (official 7-Zip cannot decode these)\n";
+        "  .7z  LZ4 / Zstd -> 7-Zip-zstd, NanaZip (official 7-Zip cannot decode these)\n"
+        "  .gz             -> gzip, 7-Zip, any gunzip (one Deflate stream, one member)\n"
+        "  .lz4            -> lz4 tool, 7-Zip-zstd, NanaZip (LZ4 frame format)\n";
 }
 
 class ConsoleProgress {
@@ -202,6 +207,22 @@ int run(std::vector<std::string> args)
         }
         return 0;
     }
+    if (command == "gz" || command == "lz4") {
+        if (positional.empty()) throw Error("nothing to compress");
+        copt.format = command == "gz" ? Format::Gzip : Format::Lz4;
+        if (!methodGiven) copt.method = copt.format == Format::Gzip ? Method::Deflate : Method::LZ4;
+        std::vector<fs::path> inputs;
+        for (const auto &p : positional) inputs.push_back(pathFromUtf8(p));
+        ConsoleProgress progress("Compressing");
+        const OperationResult r = compressEachFile(inputs, copt, std::ref(progress));
+        const double ratio = r.inputBytes ? 100.0 * double(r.outputBytes) / double(r.inputBytes) : 0;
+        std::printf("%llu files -> .%s  %s -> %s (%.1f%%)  %.2f s  %s/s\n  method %s, %s\n",
+                    static_cast<unsigned long long>(r.files), formatName(copt.format), formatBytes(double(r.inputBytes)).c_str(),
+                    formatBytes(double(r.outputBytes)).c_str(), ratio, r.seconds,
+                    formatBytes(r.seconds > 0 ? double(r.inputBytes) / r.seconds : 0).c_str(), methodName(copt.method),
+                    r.backend.c_str());
+        return printWarnings(r);
+    }
     if (positional.empty()) throw Error("missing archive path");
     const fs::path archive = pathFromUtf8(positional[0]);
 
@@ -209,8 +230,12 @@ int run(std::vector<std::string> args)
         if (positional.size() < 2) throw Error("nothing to add");
         std::string ext = utf8FromPath(archive.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        copt.format = ext == ".zip" ? Format::Zip : Format::SevenZip;
-        if (!methodGiven) copt.method = copt.format == Format::Zip ? Method::Deflate : Method::LZ4;
+        copt.format = ext == ".zip"                  ? Format::Zip
+                    : ext == ".gz" || ext == ".tgz" ? Format::Gzip
+                    : ext == ".lz4"                 ? Format::Lz4
+                                                    : Format::SevenZip;
+        if (!methodGiven) copt.method = copt.format == Format::Zip || copt.format == Format::Gzip ? Method::Deflate
+                                      : Method::LZ4;
         std::vector<fs::path> inputs;
         for (std::size_t i = 1; i < positional.size(); ++i) inputs.push_back(pathFromUtf8(positional[i]));
         ConsoleProgress progress("Compressing");

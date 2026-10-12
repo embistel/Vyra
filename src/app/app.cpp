@@ -53,6 +53,9 @@ int runVerb(const QString &verb, const QStringList &paths)
         ok = !Actions::compressQuick(nullptr, paths, vyra::Format::SevenZip).isEmpty();
     } else if (verb == QStringLiteral("add-zip")) {
         ok = !Actions::compressQuick(nullptr, paths, vyra::Format::Zip).isEmpty();
+    } else if (verb == QStringLiteral("add-gz") || verb == QStringLiteral("add-lz4")) {
+        const vyra::Format format = verb == QStringLiteral("add-gz") ? vyra::Format::Gzip : vyra::Format::Lz4;
+        ok = Actions::compressEach(nullptr, paths, CompressDialog::savedOptions(format));
     } else if (verb == QStringLiteral("extract-here") || verb == QStringLiteral("extract-folder")) {
         for (const QString &archive : paths) {
             const QString dest = verb == QStringLiteral("extract-here") ? Actions::smartDestination(archive)
@@ -77,16 +80,18 @@ int runVerb(const QString &verb, const QStringList &paths)
 int App::run(QApplication &application)
 {
     QCommandLineParser parser;
-    parser.setApplicationDescription(QCoreApplication::translate("App", "GPU accelerated 7z / zip archiver"));
+    parser.setApplicationDescription(QCoreApplication::translate("App", "GPU accelerated 7z / zip / gz / lz4 archiver"));
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument(QStringLiteral("paths"), QCoreApplication::translate("App", "Archive to open, or paths for a verb"), QStringLiteral("[paths...]"));
     const QStringList verbs = {QStringLiteral("compress"), QStringLiteral("add-7z"), QStringLiteral("add-zip"),
-                               QStringLiteral("extract-here"), QStringLiteral("extract-folder"), QStringLiteral("extract-dialog"),
-                               QStringLiteral("test")};
+                               QStringLiteral("add-gz"), QStringLiteral("add-lz4"), QStringLiteral("extract-here"),
+                               QStringLiteral("extract-folder"), QStringLiteral("extract-dialog"), QStringLiteral("test")};
     parser.addOption({QStringLiteral("compress"), QCoreApplication::translate("App", "Show the compression dialog for the paths")});
     parser.addOption({QStringLiteral("add-7z"), QCoreApplication::translate("App", "Compress the paths to <name>.7z")});
     parser.addOption({QStringLiteral("add-zip"), QCoreApplication::translate("App", "Compress the paths to <name>.zip")});
+    parser.addOption({QStringLiteral("add-gz"), QCoreApplication::translate("App", "Compress each file to <file>.gz")});
+    parser.addOption({QStringLiteral("add-lz4"), QCoreApplication::translate("App", "Compress each file to <file>.lz4")});
     parser.addOption({QStringLiteral("extract-here"), QCoreApplication::translate("App", "Extract next to the archive")});
     parser.addOption({QStringLiteral("extract-folder"), QCoreApplication::translate("App", "Extract into a folder named after the archive")});
     parser.addOption({QStringLiteral("extract-dialog"), QCoreApplication::translate("App", "Choose where to extract")});
@@ -106,6 +111,10 @@ int App::run(QApplication &application)
         if (!ok) QMessageBox::critical(nullptr, QStringLiteral("Vyra"), error);
         return ok ? 0 : 1;
     }
+    // Menus installed by an older version of this executable gain the
+    // entries added since (gz / lz4), whether Vyra starts from a verb or not.
+    if (ShellIntegration::isOutdated(QCoreApplication::applicationFilePath()))
+        ShellIntegration::install(QCoreApplication::applicationFilePath(), koreanUi());
     for (const QString &verb : verbs) {
         if (!parser.isSet(verb)) continue;
         application.setQuitOnLastWindowClosed(false);

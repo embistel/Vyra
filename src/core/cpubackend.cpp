@@ -216,7 +216,23 @@ private:
             ctx.stream.avail_out = std::uint32_t(cap);
             const int rc = zng_deflate(&ctx.stream, Z_SYNC_FLUSH);
             if (rc != Z_OK || ctx.stream.avail_in != 0) throw Error("Deflate compression failed");
-            return cap - ctx.stream.avail_out;
+            const std::size_t packed = cap - ctx.stream.avail_out;
+            // Incompressible input: zlib-ng's fastest level still emits fixed
+            // Huffman codes (~6% growth); stored blocks cost 5 bytes per 64 KiB.
+            const std::size_t stored = size + 5 * ((size + 65534) / 65535);
+            if (packed <= stored) return packed;
+            std::uint8_t *out = dst;
+            for (std::size_t off = 0; off < size || off == 0;) {
+                const std::size_t n = std::min<std::size_t>(size - off, 65535);
+                out[0] = 0x00; // BFINAL = 0, BTYPE = stored, padding to the byte boundary
+                out[1] = std::uint8_t(n); out[2] = std::uint8_t(n >> 8);
+                out[3] = std::uint8_t(~n); out[4] = std::uint8_t(~n >> 8);
+                std::memcpy(out + 5, src + off, n);
+                out += 5 + n;
+                off += n;
+                if (n == 0) break;
+            }
+            return std::size_t(out - dst);
         }
         case Method::LZ4: {
             const int n = level >= 4

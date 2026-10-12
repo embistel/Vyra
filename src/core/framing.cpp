@@ -51,6 +51,15 @@ std::size_t writeLz4FrameHeader(std::uint8_t *out, std::size_t blockMaximum)
     return kLz4FrameHeaderSize;
 }
 
+std::size_t writeLz4SizedFrameHeader(std::uint8_t *out, std::size_t blockMaximum, std::uint64_t contentSize)
+{
+    writeLz4FrameHeader(out, blockMaximum);
+    out[4] = 0x68; // version 01, independent blocks, content size present
+    for (int k = 0; k < 8; ++k) out[6 + k] = std::uint8_t(contentSize >> (8 * k));
+    out[14] = std::uint8_t((xxh32Short(out + 4, 10) >> 8) & 0xFF);
+    return kLz4SizedFrameHeaderSize;
+}
+
 std::size_t writeLz4Block(std::uint8_t *out, const std::uint8_t *compressed, std::size_t compressedSize,
                           const std::uint8_t *raw, std::size_t rawSize)
 {
@@ -111,26 +120,28 @@ std::size_t FrameParser::parseLz4(const std::uint8_t *data, std::size_t size, st
             const bool hasDict = (flg & 0x01) != 0;
             const std::size_t headerSize = 7 + (hasContentSize ? 8 : 0) + (hasDict ? 4 : 0);
             if (size - pos < headerSize) break;
-            if (!independent || hasDict) { m_fallback = true; break; }
+            if (data[pos + headerSize - 1] != std::uint8_t(xxh32Short(data + pos + 4, headerSize - 5) >> 8))
+                throw Error("corrupt LZ4 frame header");
+            // Linked blocks need the previous block; checksums (the lz4 tool
+            // writes a content checksum by default) are verified by liblz4's
+            // streaming decoder.
+            const bool checksums = (flg & 0x14) != 0;
+            if (!independent || hasDict || checksums) { m_fallback = true; break; }
             const int id = (bd >> 4) & 7;
             if (id < 4) throw Error("invalid LZ4 block size");
             m_blockMaximum = std::size_t(1) << (8 + 2 * id);
-            m_blockChecksum = (flg & 0x10) != 0;
-            m_contentChecksum = (flg & 0x04) != 0;
             pos += headerSize;
             m_state = State::Blocks;
         } else {
             if (size - pos < 4) break;
             const std::uint32_t word = getLE32(data + pos);
             if (word == 0) {
-                const std::size_t need = 4 + (m_contentChecksum ? 4 : 0);
-                if (size - pos < need) break;
-                pos += need;
+                pos += 4;
                 m_state = State::FrameStart;
                 continue;
             }
             const std::size_t blockSize = word & 0x7FFFFFFFu;
-            const std::size_t need = 4 + blockSize + (m_blockChecksum ? 4 : 0);
+            const std::size_t need = 4 + blockSize;
             if (blockSize > m_blockMaximum + 64) throw Error("invalid LZ4 block");
             if (size - pos < need) break;
             FramedChunk c;

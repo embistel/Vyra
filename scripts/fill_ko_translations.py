@@ -26,7 +26,10 @@ KO = {
     "Testing": "테스트 중",
     "No errors found.\n\n%1\n%2 files · %3 · %4 s\n%5": "오류가 없습니다.\n\n%1\n파일 %2개 · %3 · %4초\n%5",
     "Extract %1 to": "%1 압축 풀 위치",
-    "GPU accelerated 7z / zip archiver": "GPU 가속 7z / zip 압축 프로그램",
+    "GPU accelerated 7z / zip / gz / lz4 archiver": "GPU 가속 7z / zip / gz / lz4 압축 프로그램",
+    "Each file → .%1 next to it": "각 파일을 같은 위치에 .%1로",
+    "Compress each file to <file>.gz": "각 파일을 <파일>.gz로 압축",
+    "Compress each file to <file>.lz4": "각 파일을 <파일>.lz4로 압축",
     "Archive to open, or paths for a verb": "열 압축 파일 또는 명령에 전달할 경로",
     "Show the compression dialog for the paths": "경로에 대한 압축 대화상자 표시",
     "Compress the paths to <name>.7z": "경로를 <이름>.7z로 압축",
@@ -78,6 +81,13 @@ KO = {
     "Deflate — opens in official 7-Zip": "Deflate — 공식 7-Zip에서 열림",
     "Store — no compression": "저장 — 압축 안 함",
     "Deflate — opens everywhere": "Deflate — 어디서나 열림",
+    "gz — each file": "gz — 파일마다",
+    "lz4 — each file": "lz4 — 파일마다",
+    "Next to each file: <name>.%1": "각 파일 옆에: <이름>.%1",
+    "Standard gzip, one .gz per file: opens in 7-Zip, WinRAR, gzip and every Unix tool.":
+        "표준 gzip, 파일마다 .gz 하나: 7-Zip, WinRAR, gzip과 모든 Unix 도구에서 열립니다.",
+    "Standard LZ4 frame, one .lz4 per file: opens in the lz4 tool, 7-Zip-zstd and NanaZip.":
+        "표준 LZ4 프레임, 파일마다 .lz4 하나: lz4 도구, 7-Zip-zstd, NanaZip에서 열립니다.",
     "Standard ZIP: opens in Windows Explorer, 7-Zip and every other unzip tool.":
         "표준 ZIP: Windows 탐색기, 7-Zip 등 모든 압축 프로그램에서 열 수 있습니다.",
     "Standard 7z: opens in the official 7-Zip, NanaZip and other 7z tools.":
@@ -89,8 +99,8 @@ KO = {
     "Archive to create": "만들 압축 파일",
     "%1 already exists. Replace it?": "%1 파일이 이미 있습니다. 바꾸시겠습니까?",
     # DropView
-    "Drop files or folders here to compress them\nor drop a .7z / .zip archive to open it.":
-        "파일이나 폴더를 여기에 놓으면 압축합니다.\n.7z / .zip 파일을 놓으면 엽니다.",
+    "Drop files or folders here to compress them\nor drop a .7z / .zip / .gz / .lz4 file to open it.":
+        "파일이나 폴더를 여기에 놓으면 압축합니다.\n.7z / .zip / .gz / .lz4 파일을 놓으면 엽니다.",
     # MainWindow
     "Vyra — GPU accelerated archiver": "Vyra — GPU 가속 압축 프로그램",
     "Compress files to 7z / zip at GPU speed, or open an archive.": "GPU 속도로 7z / zip 압축을 만들거나 압축 파일을 여세요.",
@@ -119,7 +129,8 @@ KO = {
     "&Help": "도움말(&H)",
     "About Vyra": "Vyra 정보",
     "Main Toolbar": "기본 도구 모음",
-    "Drag files here to compress, or open a .7z / .zip archive.": "파일을 끌어다 놓아 압축하거나 .7z / .zip 파일을 여세요.",
+    "Drag files here to compress, or open a .7z / .zip / .gz / .lz4 file.":
+        "파일을 끌어다 놓아 압축하거나 .7z / .zip / .gz / .lz4 파일을 여세요.",
     "Detecting GPU…": "GPU 확인 중…",
     "Compression runs on the GPU with NVIDIA nvCOMP.": "NVIDIA nvCOMP로 GPU에서 압축합니다.",
     "CPU mode": "CPU 모드",
@@ -127,10 +138,11 @@ KO = {
     "Cannot open %1:\n%2": "%1 파일을 열 수 없습니다:\n%2",
     "%1 files · %2 → %3 (%4%) · %5 %6": "파일 %1개 · %2 → %3 (%4%) · %5 %6",
     "Created %1": "%1 생성됨",
+    "Compressed each file next to the original in %1": "%1에서 각 파일을 원본 옆에 압축했습니다",
     "Files to compress": "압축할 파일",
     "Folder to compress": "압축할 폴더",
     "Open Archive": "압축 파일 열기",
-    "Archives (*.7z *.zip);;All files (*.*)": "압축 파일 (*.7z *.zip);;모든 파일 (*.*)",
+    "Archives (*.7z *.zip *.gz *.tgz *.lz4);;All files (*.*)": "압축 파일 (*.7z *.zip *.gz *.tgz *.lz4);;모든 파일 (*.*)",
     "Could not create a temporary export folder.": "임시 내보내기 폴더를 만들 수 없습니다.",
     "Copied %1 item(s). Paste in Explorer.": "항목 %1개를 복사했습니다. 탐색기에 붙여넣으세요.",
     "Could not open the file with the associated program.": "연결된 프로그램으로 파일을 열 수 없습니다.",
@@ -150,12 +162,12 @@ KO = {
     "Done": "완료",
     "Explorer integration updated.": "탐색기 통합을 갱신했습니다.",
     "Explorer integration removed.": "탐색기 통합을 제거했습니다.",
-    "Add Vyra to the Explorer right-click menu for the current user?\n\n• Files and folders: Compress…, Fast compress to .7z, Compress to .zip\n• .7z / .zip files: Open, Extract Here, Extract to Folder, Test\n\nNo administrator rights are needed. On Windows 11 the entries appear under \"Show more options\".":
-        "현재 사용자의 탐색기 오른쪽 클릭 메뉴에 Vyra를 추가할까요?\n\n• 파일·폴더: 압축하기…, 7z로 빠르게 압축, ZIP으로 압축\n• .7z / .zip 파일: 열기, 여기에 풀기, 폴더를 만들어 풀기, 테스트\n\n관리자 권한이 필요 없습니다. Windows 11에서는 \"더 많은 옵션 표시\" 아래에 나타납니다.",
+    "Add Vyra to the Explorer right-click menu for the current user?\n\n• Files and folders: Compress…, Fast compress to .7z, Compress to .zip, Compress each file to .gz / .lz4\n• .7z / .zip / .gz / .lz4 files: Open, Extract Here, Extract to Folder, Test\n\nNo administrator rights are needed. On Windows 11 the entries appear under \"Show more options\".":
+        "현재 사용자의 탐색기 오른쪽 클릭 메뉴에 Vyra를 추가할까요?\n\n• 파일·폴더: 압축하기…, 7z로 빠르게 압축, ZIP으로 압축, 각 파일을 .gz / .lz4로 압축\n• .7z / .zip / .gz / .lz4 파일: 열기, 여기에 풀기, 폴더를 만들어 풀기, 테스트\n\n관리자 권한이 필요 없습니다. Windows 11에서는 \"더 많은 옵션 표시\" 아래에 나타납니다.",
     "Explorer integration installed.": "탐색기 통합을 설치했습니다.",
     "The language will change after restarting the app. Restart now?": "앱을 다시 시작하면 언어가 바뀝니다. 지금 다시 시작할까요?",
-    "<h2>Vyra %1</h2><p>GPU accelerated 7z / zip archiver built on NVIDIA nvCOMP.</p><p>Engine: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT License</p>":
-        "<h2>Vyra %1</h2><p>NVIDIA nvCOMP 기반 GPU 가속 7z / zip 압축 프로그램</p><p>엔진: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT 라이선스</p>",
+    "<h2>Vyra %1</h2><p>GPU accelerated 7z / zip / gz / lz4 archiver built on NVIDIA nvCOMP.</p><p>Engine: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT License</p>":
+        "<h2>Vyra %1</h2><p>NVIDIA nvCOMP 기반 GPU 가속 7z / zip / gz / lz4 압축 프로그램</p><p>엔진: %2</p><p>Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK</p><p>MIT 라이선스</p>",
     # ProgressDialog
     "Scanning files…": "파일 확인 중…",
     "Compressing…": "압축 중…",

@@ -32,7 +32,9 @@ private:
     void browse();
 
     QStringList m_inputs;
+    QString m_archivePath;            // kept while gz / lz4 (no archive path) is selected
     QLineEdit *m_path = nullptr;
+    QWidget *m_browse = nullptr;
     QComboBox *m_format = nullptr;
     QComboBox *m_method = nullptr;
     QComboBox *m_level = nullptr;

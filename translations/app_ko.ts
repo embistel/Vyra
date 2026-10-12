@@ -37,21 +37,27 @@
     </message>
     <message>
         <location filename="../src/app/actions.cpp" line="79"/>
+        <location filename="../src/app/actions.cpp" line="109"/>
         <source>Compressing</source>
         <translation>압축 중</translation>
     </message>
     <message>
-        <location filename="../src/app/actions.cpp" line="111"/>
+        <location filename="../src/app/actions.cpp" line="110"/>
+        <source>Each file → .%1 next to it</source>
+        <translation>각 파일을 같은 위치에 .%1로</translation>
+    </message>
+    <message>
+        <location filename="../src/app/actions.cpp" line="134"/>
         <source>Extracting</source>
         <translation>압축 푸는 중</translation>
     </message>
     <message>
-        <location filename="../src/app/actions.cpp" line="125"/>
+        <location filename="../src/app/actions.cpp" line="148"/>
         <source>Testing</source>
         <translation>테스트 중</translation>
     </message>
     <message>
-        <location filename="../src/app/actions.cpp" line="132"/>
+        <location filename="../src/app/actions.cpp" line="155"/>
         <source>No errors found.
 
 %1
@@ -67,62 +73,72 @@
 <context>
     <name>App</name>
     <message>
-        <location filename="../src/app/app.cpp" line="48"/>
+        <location filename="../src/app/app.cpp" line="67"/>
         <source>Extract %1 to</source>
         <translation>%1 압축 풀 위치</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="64"/>
-        <source>GPU accelerated 7z / zip archiver</source>
-        <translation>GPU 가속 7z / zip 압축 프로그램</translation>
+        <location filename="../src/app/app.cpp" line="83"/>
+        <source>GPU accelerated 7z / zip / gz / lz4 archiver</source>
+        <translation>GPU 가속 7z / zip / gz / lz4 압축 프로그램</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="67"/>
+        <location filename="../src/app/app.cpp" line="86"/>
         <source>Archive to open, or paths for a verb</source>
         <translation>열 압축 파일 또는 명령에 전달할 경로</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="71"/>
+        <location filename="../src/app/app.cpp" line="90"/>
         <source>Show the compression dialog for the paths</source>
         <translation>경로에 대한 압축 대화상자 표시</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="72"/>
+        <location filename="../src/app/app.cpp" line="91"/>
         <source>Compress the paths to &lt;name&gt;.7z</source>
         <translation>경로를 &lt;이름&gt;.7z로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="73"/>
+        <location filename="../src/app/app.cpp" line="92"/>
         <source>Compress the paths to &lt;name&gt;.zip</source>
         <translation>경로를 &lt;이름&gt;.zip으로 압축</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="74"/>
+        <location filename="../src/app/app.cpp" line="93"/>
+        <source>Compress each file to &lt;file&gt;.gz</source>
+        <translation>각 파일을 &lt;파일&gt;.gz로 압축</translation>
+    </message>
+    <message>
+        <location filename="../src/app/app.cpp" line="94"/>
+        <source>Compress each file to &lt;file&gt;.lz4</source>
+        <translation>각 파일을 &lt;파일&gt;.lz4로 압축</translation>
+    </message>
+    <message>
+        <location filename="../src/app/app.cpp" line="95"/>
         <source>Extract next to the archive</source>
         <translation>압축 파일 옆에 풀기</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="75"/>
+        <location filename="../src/app/app.cpp" line="96"/>
         <source>Extract into a folder named after the archive</source>
         <translation>압축 파일 이름의 폴더에 풀기</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="76"/>
+        <location filename="../src/app/app.cpp" line="97"/>
         <source>Choose where to extract</source>
         <translation>풀 위치 선택</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="77"/>
+        <location filename="../src/app/app.cpp" line="98"/>
         <source>Test archive integrity</source>
         <translation>압축 파일 무결성 검사</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="78"/>
+        <location filename="../src/app/app.cpp" line="99"/>
         <source>Install Windows Explorer integration</source>
         <translation>Windows 탐색기 통합 설치</translation>
     </message>
     <message>
-        <location filename="../src/app/app.cpp" line="79"/>
+        <location filename="../src/app/app.cpp" line="100"/>
         <source>Remove Windows Explorer integration</source>
         <translation>Windows 탐색기 통합 제거</translation>
     </message>
@@ -173,188 +189,215 @@
 <context>
     <name>CompressDialog</name>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="69"/>
+        <location filename="../src/app/compressdialog.cpp" line="73"/>
         <source>Add to Archive</source>
         <translation>압축 파일에 추가</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="77"/>
+        <location filename="../src/app/compressdialog.cpp" line="81"/>
         <source>Create a GPU accelerated archive</source>
         <translation>GPU 가속 압축 파일 만들기</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="80"/>
+        <location filename="../src/app/compressdialog.cpp" line="84"/>
         <source>%1 items</source>
         <translation>항목 %1개</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="81"/>
+        <location filename="../src/app/compressdialog.cpp" line="85"/>
         <source>Source: %1</source>
         <translation>원본: %1</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="94"/>
+        <location filename="../src/app/compressdialog.cpp" line="99"/>
         <source>Archive:</source>
         <translation>압축 파일:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="99"/>
+        <location filename="../src/app/compressdialog.cpp" line="104"/>
+        <source>gz — each file</source>
+        <translation>gz — 파일마다</translation>
+    </message>
+    <message>
+        <location filename="../src/app/compressdialog.cpp" line="105"/>
+        <source>lz4 — each file</source>
+        <translation>lz4 — 파일마다</translation>
+    </message>
+    <message>
+        <location filename="../src/app/compressdialog.cpp" line="106"/>
         <source>Format:</source>
         <translation>형식:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="102"/>
+        <location filename="../src/app/compressdialog.cpp" line="109"/>
         <source>Method:</source>
         <translation>압축 방식:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="105"/>
+        <location filename="../src/app/compressdialog.cpp" line="112"/>
         <source>0 · Fastest</source>
         <translation>0 · 가장 빠르게</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="106"/>
+        <location filename="../src/app/compressdialog.cpp" line="113"/>
         <source>1 · Fast (recommended)</source>
         <translation>1 · 빠르게 (권장)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="107"/>
+        <location filename="../src/app/compressdialog.cpp" line="114"/>
         <source>2 · Normal</source>
         <translation>2 · 보통</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="108"/>
+        <location filename="../src/app/compressdialog.cpp" line="115"/>
         <source>3 · Normal+</source>
         <translation>3 · 보통+</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="109"/>
+        <location filename="../src/app/compressdialog.cpp" line="116"/>
         <source>4 · Good</source>
         <translation>4 · 높음</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="110"/>
+        <location filename="../src/app/compressdialog.cpp" line="117"/>
         <source>5 · Best</source>
         <translation>5 · 최고</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="111"/>
+        <location filename="../src/app/compressdialog.cpp" line="118"/>
         <source>Level:</source>
         <translation>압축 수준:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="114"/>
+        <location filename="../src/app/compressdialog.cpp" line="121"/>
         <source>Automatic (GPU when available)</source>
         <translation>자동 (가능하면 GPU)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="115"/>
+        <location filename="../src/app/compressdialog.cpp" line="122"/>
         <source>GPU (NVIDIA nvCOMP)</source>
         <translation>GPU (NVIDIA nvCOMP)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="116"/>
+        <location filename="../src/app/compressdialog.cpp" line="123"/>
         <source>CPU (all cores)</source>
         <translation>CPU (모든 코어)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="117"/>
+        <location filename="../src/app/compressdialog.cpp" line="124"/>
         <source>Engine:</source>
         <translation>엔진:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="120"/>
+        <location filename="../src/app/compressdialog.cpp" line="127"/>
         <source>Off (one block per file)</source>
         <translation>끔 (파일마다 블록)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="125"/>
+        <location filename="../src/app/compressdialog.cpp" line="132"/>
         <source>Solid block:</source>
         <translation>솔리드 블록:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="132"/>
+        <location filename="../src/app/compressdialog.cpp" line="139"/>
         <source>Independent compression unit. Larger chunks compress Zstd/LZ4 slightly better; Deflate always uses 64 KiB.</source>
         <translation>독립적으로 압축되는 단위입니다. 클수록 Zstd/LZ4 압축률이 조금 좋아지며, Deflate는 항상 64 KiB를 사용합니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="133"/>
+        <location filename="../src/app/compressdialog.cpp" line="140"/>
         <source>Chunk size:</source>
         <translation>청크 크기:</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="139"/>
+        <location filename="../src/app/compressdialog.cpp" line="146"/>
         <source>GPU ready: %1</source>
         <translation>GPU 준비됨: %1</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="140"/>
+        <location filename="../src/app/compressdialog.cpp" line="147"/>
         <source>GPU unavailable (%1) — the CPU engine will be used.</source>
         <translation>GPU를 사용할 수 없습니다 (%1) — CPU 엔진을 사용합니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="150"/>
+        <location filename="../src/app/compressdialog.cpp" line="157"/>
         <source>Compress</source>
         <translation>압축</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="179"/>
+        <location filename="../src/app/compressdialog.cpp" line="191"/>
+        <location filename="../src/app/compressdialog.cpp" line="201"/>
         <source>LZ4 — fastest</source>
         <translation>LZ4 — 가장 빠름</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="180"/>
+        <location filename="../src/app/compressdialog.cpp" line="192"/>
         <source>Zstd — fast, smaller</source>
         <translation>Zstd — 빠르고 더 작게</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="181"/>
+        <location filename="../src/app/compressdialog.cpp" line="193"/>
         <source>Deflate — opens in official 7-Zip</source>
         <translation>Deflate — 공식 7-Zip에서 열림</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="182"/>
-        <location filename="../src/app/compressdialog.cpp" line="185"/>
+        <location filename="../src/app/compressdialog.cpp" line="194"/>
+        <location filename="../src/app/compressdialog.cpp" line="197"/>
         <source>Store — no compression</source>
         <translation>저장 — 압축 안 함</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="184"/>
+        <location filename="../src/app/compressdialog.cpp" line="196"/>
+        <location filename="../src/app/compressdialog.cpp" line="199"/>
         <source>Deflate — opens everywhere</source>
         <translation>Deflate — 어디서나 열림</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="210"/>
+        <location filename="../src/app/compressdialog.cpp" line="209"/>
+        <source>Next to each file: &lt;name&gt;.%1</source>
+        <translation>각 파일 옆에: &lt;이름&gt;.%1</translation>
+    </message>
+    <message>
+        <location filename="../src/app/compressdialog.cpp" line="235"/>
+        <source>Standard gzip, one .gz per file: opens in 7-Zip, WinRAR, gzip and every Unix tool.</source>
+        <translation>표준 gzip, 파일마다 .gz 하나: 7-Zip, WinRAR, gzip과 모든 Unix 도구에서 열립니다.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/compressdialog.cpp" line="237"/>
+        <source>Standard LZ4 frame, one .lz4 per file: opens in the lz4 tool, 7-Zip-zstd and NanaZip.</source>
+        <translation>표준 LZ4 프레임, 파일마다 .lz4 하나: lz4 도구, 7-Zip-zstd, NanaZip에서 열립니다.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/compressdialog.cpp" line="239"/>
         <source>Standard ZIP: opens in Windows Explorer, 7-Zip and every other unzip tool.</source>
         <translation>표준 ZIP: Windows 탐색기, 7-Zip 등 모든 압축 프로그램에서 열 수 있습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="212"/>
+        <location filename="../src/app/compressdialog.cpp" line="241"/>
         <source>Standard 7z: opens in the official 7-Zip, NanaZip and other 7z tools.</source>
         <translation>표준 7z: 공식 7-Zip, NanaZip 등 7z를 지원하는 프로그램에서 열 수 있습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="214"/>
+        <location filename="../src/app/compressdialog.cpp" line="243"/>
         <source>7z with %1: opens in NanaZip and 7-Zip-zstd. The official 7-Zip needs the lz4/zstd codec plugin. Pick Deflate for the widest 7z compatibility.</source>
         <translation>%1 방식 7z: NanaZip과 7-Zip-zstd에서 열 수 있습니다. 공식 7-Zip은 lz4/zstd 코덱 플러그인이 필요합니다. 가장 넓은 호환성이 필요하면 Deflate를 선택하세요.</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="223"/>
+        <location filename="../src/app/compressdialog.cpp" line="252"/>
         <source>ZIP archive (*.zip)</source>
         <translation>ZIP 압축 파일 (*.zip)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="223"/>
+        <location filename="../src/app/compressdialog.cpp" line="252"/>
         <source>7z archive (*.7z)</source>
         <translation>7z 압축 파일 (*.7z)</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="224"/>
+        <location filename="../src/app/compressdialog.cpp" line="253"/>
         <source>Archive to create</source>
         <translation>만들 압축 파일</translation>
     </message>
     <message>
-        <location filename="../src/app/compressdialog.cpp" line="247"/>
+        <location filename="../src/app/compressdialog.cpp" line="277"/>
         <source>%1 already exists. Replace it?</source>
         <translation>%1 파일이 이미 있습니다. 바꾸시겠습니까?</translation>
     </message>
@@ -364,9 +407,9 @@
     <message>
         <location filename="../src/app/dropview.cpp" line="57"/>
         <source>Drop files or folders here to compress them
-or drop a .7z / .zip archive to open it.</source>
+or drop a .7z / .zip / .gz / .lz4 file to open it.</source>
         <translation>파일이나 폴더를 여기에 놓으면 압축합니다.
-.7z / .zip 파일을 놓으면 엽니다.</translation>
+.7z / .zip / .gz / .lz4 파일을 놓으면 엽니다.</translation>
     </message>
 </context>
 <context>
@@ -493,7 +536,7 @@ or drop a .7z / .zip archive to open it.</source>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="141"/>
-        <location filename="../src/app/mainwindow.cpp" line="469"/>
+        <location filename="../src/app/mainwindow.cpp" line="473"/>
         <source>Language</source>
         <translation>언어</translation>
     </message>
@@ -504,7 +547,7 @@ or drop a .7z / .zip archive to open it.</source>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="157"/>
-        <location filename="../src/app/mainwindow.cpp" line="480"/>
+        <location filename="../src/app/mainwindow.cpp" line="484"/>
         <source>About Vyra</source>
         <translation>Vyra 정보</translation>
     </message>
@@ -515,8 +558,33 @@ or drop a .7z / .zip archive to open it.</source>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="168"/>
-        <source>Drag files here to compress, or open a .7z / .zip archive.</source>
-        <translation>파일을 끌어다 놓아 압축하거나 .7z / .zip 파일을 여세요.</translation>
+        <source>Drag files here to compress, or open a .7z / .zip / .gz / .lz4 file.</source>
+        <translation>파일을 끌어다 놓아 압축하거나 .7z / .zip / .gz / .lz4 파일을 여세요.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="278"/>
+        <source>Archives (*.7z *.zip *.gz *.tgz *.lz4);;All files (*.*)</source>
+        <translation>압축 파일 (*.7z *.zip *.gz *.tgz *.lz4);;모든 파일 (*.*)</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="459"/>
+        <source>Add Vyra to the Explorer right-click menu for the current user?
+
+• Files and folders: Compress…, Fast compress to .7z, Compress to .zip, Compress each file to .gz / .lz4
+• .7z / .zip / .gz / .lz4 files: Open, Extract Here, Extract to Folder, Test
+
+No administrator rights are needed. On Windows 11 the entries appear under &quot;Show more options&quot;.</source>
+        <translation>현재 사용자의 탐색기 오른쪽 클릭 메뉴에 Vyra를 추가할까요?
+
+• 파일·폴더: 압축하기…, 7z로 빠르게 압축, ZIP으로 압축, 각 파일을 .gz / .lz4로 압축
+• .7z / .zip / .gz / .lz4 파일: 열기, 여기에 풀기, 폴더를 만들어 풀기, 테스트
+
+관리자 권한이 필요 없습니다. Windows 11에서는 "더 많은 옵션 표시" 아래에 나타납니다.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="485"/>
+        <source>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;GPU accelerated 7z / zip / gz / lz4 archiver built on NVIDIA nvCOMP.&lt;/p&gt;&lt;p&gt;Engine: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT License&lt;/p&gt;</source>
+        <translation>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;NVIDIA nvCOMP 기반 GPU 가속 7z / zip / gz / lz4 압축 프로그램&lt;/p&gt;&lt;p&gt;엔진: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT 라이선스&lt;/p&gt;</translation>
     </message>
     <message>
         <location filename="../src/app/mainwindow.cpp" line="197"/>
@@ -551,96 +619,96 @@ or drop a .7z / .zip archive to open it.</source>
         <translation>파일 %1개 · %2 → %3 (%4%) · %5 %6</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="255"/>
+        <location filename="../src/app/mainwindow.cpp" line="256"/>
+        <source>Compressed each file next to the original in %1</source>
+        <translation>%1에서 각 파일을 원본 옆에 압축했습니다</translation>
+    </message>
+    <message>
+        <location filename="../src/app/mainwindow.cpp" line="259"/>
         <source>Created %1</source>
         <translation>%1 생성됨</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="261"/>
+        <location filename="../src/app/mainwindow.cpp" line="265"/>
         <source>Files to compress</source>
         <translation>압축할 파일</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="267"/>
+        <location filename="../src/app/mainwindow.cpp" line="271"/>
         <source>Folder to compress</source>
         <translation>압축할 폴더</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="273"/>
+        <location filename="../src/app/mainwindow.cpp" line="277"/>
         <source>Open Archive</source>
         <translation>압축 파일 열기</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="274"/>
-        <source>Archives (*.7z *.zip);;All files (*.*)</source>
-        <translation>압축 파일 (*.7z *.zip);;모든 파일 (*.*)</translation>
-    </message>
-    <message>
-        <location filename="../src/app/mainwindow.cpp" line="298"/>
+        <location filename="../src/app/mainwindow.cpp" line="302"/>
         <source>Could not create a temporary export folder.</source>
         <translation>임시 내보내기 폴더를 만들 수 없습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="329"/>
+        <location filename="../src/app/mainwindow.cpp" line="333"/>
         <source>Copied %1 item(s). Paste in Explorer.</source>
         <translation>항목 %1개를 복사했습니다. 탐색기에 붙여넣으세요.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="356"/>
+        <location filename="../src/app/mainwindow.cpp" line="360"/>
         <source>Could not open the file with the associated program.</source>
         <translation>연결된 프로그램으로 파일을 열 수 없습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="383"/>
+        <location filename="../src/app/mainwindow.cpp" line="387"/>
         <source>Folder to extract the selection to</source>
         <translation>선택 항목을 풀 폴더</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="386"/>
+        <location filename="../src/app/mainwindow.cpp" line="390"/>
         <source>Extracted the selection.</source>
         <translation>선택 항목을 풀었습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="392"/>
+        <location filename="../src/app/mainwindow.cpp" line="396"/>
         <source>Folder to extract everything to</source>
         <translation>전체를 풀 폴더</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="400"/>
+        <location filename="../src/app/mainwindow.cpp" line="404"/>
         <source>Extracted to %1</source>
         <translation>%1에 풀었습니다</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="420"/>
+        <location filename="../src/app/mainwindow.cpp" line="424"/>
         <source>Archive Properties</source>
         <translation>압축 파일 속성</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="421"/>
+        <location filename="../src/app/mainwindow.cpp" line="425"/>
         <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;&lt;br&gt;Format: %2&lt;br&gt;Methods: %3%4&lt;br&gt;Files: %5 · Folders: %6&lt;br&gt;Original size: %7&lt;br&gt;Archive size: %8 (%9%)</source>
         <translation>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;&lt;br&gt;형식: %2&lt;br&gt;방식: %3%4&lt;br&gt;파일: %5개 · 폴더: %6개&lt;br&gt;원본 크기: %7&lt;br&gt;압축 크기: %8 (%9%)</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="424"/>
+        <location filename="../src/app/mainwindow.cpp" line="428"/>
         <source> (solid)</source>
         <translation> (솔리드)</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="441"/>
-        <location filename="../src/app/mainwindow.cpp" line="444"/>
-        <location filename="../src/app/mainwindow.cpp" line="454"/>
+        <location filename="../src/app/mainwindow.cpp" line="445"/>
+        <location filename="../src/app/mainwindow.cpp" line="448"/>
+        <location filename="../src/app/mainwindow.cpp" line="458"/>
         <source>Windows Explorer Integration</source>
         <translation>Windows 탐색기 통합</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="442"/>
+        <location filename="../src/app/mainwindow.cpp" line="446"/>
         <source>Explorer integration is installed system-wide by the installer.
 To change or remove it, use Windows Installed apps.</source>
         <translation>탐색기 통합이 설치 프로그램에 의해 시스템 전체에 설치되어 있습니다.
 변경하거나 제거하려면 Windows의 설치된 앱을 사용하세요.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="445"/>
+        <location filename="../src/app/mainwindow.cpp" line="449"/>
         <source>Explorer integration is installed.
 
 Yes: refresh it (e.g. after moving Vyra or changing the language)
@@ -651,51 +719,31 @@ No: remove it</source>
 아니요: 제거</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="449"/>
-        <location filename="../src/app/mainwindow.cpp" line="452"/>
-        <location filename="../src/app/mainwindow.cpp" line="460"/>
+        <location filename="../src/app/mainwindow.cpp" line="453"/>
+        <location filename="../src/app/mainwindow.cpp" line="456"/>
+        <location filename="../src/app/mainwindow.cpp" line="464"/>
         <source>Done</source>
         <translation>완료</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="449"/>
+        <location filename="../src/app/mainwindow.cpp" line="453"/>
         <source>Explorer integration updated.</source>
         <translation>탐색기 통합을 갱신했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="452"/>
+        <location filename="../src/app/mainwindow.cpp" line="456"/>
         <source>Explorer integration removed.</source>
         <translation>탐색기 통합을 제거했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="455"/>
-        <source>Add Vyra to the Explorer right-click menu for the current user?
-
-• Files and folders: Compress…, Fast compress to .7z, Compress to .zip
-• .7z / .zip files: Open, Extract Here, Extract to Folder, Test
-
-No administrator rights are needed. On Windows 11 the entries appear under &quot;Show more options&quot;.</source>
-        <translation>현재 사용자의 탐색기 오른쪽 클릭 메뉴에 Vyra를 추가할까요?
-
-• 파일·폴더: 압축하기…, 7z로 빠르게 압축, ZIP으로 압축
-• .7z / .zip 파일: 열기, 여기에 풀기, 폴더를 만들어 풀기, 테스트
-
-관리자 권한이 필요 없습니다. Windows 11에서는 "더 많은 옵션 표시" 아래에 나타납니다.</translation>
-    </message>
-    <message>
-        <location filename="../src/app/mainwindow.cpp" line="460"/>
+        <location filename="../src/app/mainwindow.cpp" line="464"/>
         <source>Explorer integration installed.</source>
         <translation>탐색기 통합을 설치했습니다.</translation>
     </message>
     <message>
-        <location filename="../src/app/mainwindow.cpp" line="469"/>
+        <location filename="../src/app/mainwindow.cpp" line="473"/>
         <source>The language will change after restarting the app. Restart now?</source>
         <translation>앱을 다시 시작하면 언어가 바뀝니다. 지금 다시 시작할까요?</translation>
-    </message>
-    <message>
-        <location filename="../src/app/mainwindow.cpp" line="481"/>
-        <source>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;GPU accelerated 7z / zip archiver built on NVIDIA nvCOMP.&lt;/p&gt;&lt;p&gt;Engine: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT License&lt;/p&gt;</source>
-        <translation>&lt;h2&gt;Vyra %1&lt;/h2&gt;&lt;p&gt;NVIDIA nvCOMP 기반 GPU 가속 7z / zip 압축 프로그램&lt;/p&gt;&lt;p&gt;엔진: %2&lt;/p&gt;&lt;p&gt;Qt %3 · zlib-ng · LZ4 · Zstandard · LZMA SDK&lt;/p&gt;&lt;p&gt;MIT 라이선스&lt;/p&gt;</translation>
     </message>
 </context>
 <context>

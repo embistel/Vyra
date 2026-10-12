@@ -34,6 +34,9 @@ struct DecoderSpec {
 // streams with dependent blocks, use a sequential streaming decoder.
 std::unique_ptr<StreamDecoder> createStreamDecoder(const DecoderSpec &spec, Backend *backend, std::size_t batchBytes);
 
+// gzip file (RFC 1952): every member in turn, CRC32 and size of each checked.
+std::unique_ptr<StreamDecoder> createGzipDecoder();
+
 // x86 BCJ filter applied on top of a decoded stream (7z "BCJ" coder).
 std::unique_ptr<StreamDecoder> createBcjDecoder(std::unique_ptr<StreamDecoder> inner);
 

@@ -16,6 +16,9 @@ std::size_t lz4BlockMaximum(std::size_t chunkSize);
 constexpr std::size_t kLz4FrameHeaderSize = 7;
 constexpr std::size_t kLz4EndMarkSize = 4;
 std::size_t writeLz4FrameHeader(std::uint8_t *out, std::size_t blockMaximum);
+// Header of a standalone .lz4 file: also records the content size.
+constexpr std::size_t kLz4SizedFrameHeaderSize = 15;
+std::size_t writeLz4SizedFrameHeader(std::uint8_t *out, std::size_t blockMaximum, std::uint64_t contentSize);
 // Size of the block written by writeLz4Block (stored raw when compression did not help).
 inline std::size_t lz4BlockSize(std::size_t compressedSize, std::size_t rawSize)
 {
@@ -37,8 +40,9 @@ struct FramedChunk {
 // consumes complete chunks from the front of `data` and returns the number
 // of bytes consumed; the caller keeps the remainder for the next call.
 // `fallback` becomes true at a frame boundary that cannot be split into
-// independent chunks (linked LZ4 blocks, Zstd frame without content size);
-// everything from that point must go to a streaming decoder instead.
+// independent chunks (linked LZ4 blocks, LZ4 checksums to verify, Zstd frame
+// without content size); everything from that point must go to a streaming
+// decoder instead.
 class FrameParser {
 public:
     enum class Kind { LZ4, Zstd };
@@ -57,10 +61,7 @@ private:
     State m_state = State::FrameStart;
     bool m_fallback = false;
     std::uint64_t m_skip = 0; // remaining bytes of a skippable frame
-    // Current LZ4 frame flags.
-    bool m_blockChecksum = false;
-    bool m_contentChecksum = false;
-    std::size_t m_blockMaximum = 0;
+    std::size_t m_blockMaximum = 0; // of the current LZ4 frame
 };
 
 } // namespace vyra
