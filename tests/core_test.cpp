@@ -508,14 +508,15 @@ int main(int argc, char **argv)
     }
     // Big single file, small CPU batches: exercises the mapped-input path
     // (batches of one file >= 4 MiB, mixed with copied ones), asynchronous
-    // unmapping and multi-block direct writes (archives > 16 MiB).
+    // unmapping, multi-block direct writes (archives > 16 MiB) and unbuffered
+    // extraction of files >= 64 MiB from big 7z blocks.
     const fs::path large = work / "large";
     fs::remove_all(large);
     {
-        auto data = textLike(32u << 20, 21);
+        auto data = textLike(64u << 20, 21);
         const auto noise = randomBytes(16u << 20, 22);
         data.insert(data.end(), noise.begin(), noise.end());
-        writeFile(large / "big48.bin", data);
+        writeFile(large / "big80.bin", data);
     }
     setEnv("VYRA_HYBRID", "2");
     for (Method method : {Method::LZ4, Method::Zstd, Method::Deflate})

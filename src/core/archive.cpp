@@ -1553,7 +1553,7 @@ public:
     }
     void write(const std::uint8_t *p, std::size_t n)
     {
-        m_crc = crc32Update(m_crc, p, n);
+        if (m_entry.hasCrc) m_crc = crc32Update(m_crc, p, n); // nothing to compare with otherwise (.lz4)
         m_size += n;
         if (m_write) m_out.write(p, n);
     }
@@ -1610,6 +1610,13 @@ private:
         std::lock_guard<std::mutex> lock(m_warningMutex);
         m_warnings.push_back(message);
     }
+
+    // Auto decodes on the CPU. The GPU decoder works (--gpu), but Vyra's GPU
+    // extraction does not overlap decoding, transfers and writing yet, so end
+    // to end it measured slower than all-core CPU decoding (a 4.45 GiB .lz4:
+    // 1.0-1.15 vs 1.6-1.9 GiB/s) although the GPU decodes about 5 GiB/s in
+    // memory. Revisit once that path is pipelined.
+    BackendKind decodeBackend() const { return m_options.backend == BackendKind::Gpu ? BackendKind::Gpu : BackendKind::Cpu; }
 
     fs::path target(const std::string &archivePath)
     {
@@ -1734,7 +1741,7 @@ private:
             decoder = createGzipDecoder(); // checks every member's CRC32 and size
         } else {
             // Independent blocks decode in parallel; the GPU only pays off for big files.
-            const BackendKind kind = remaining < (std::uint64_t(256) << 20) ? BackendKind::Cpu : m_options.backend;
+            const BackendKind kind = remaining < (std::uint64_t(256) << 20) ? BackendKind::Cpu : decodeBackend();
             backend = selectBackend(kind, m_pool, m_options.gpuDevice);
             const std::size_t batch = std::size_t(std::min<std::uint64_t>(m_options.batchSize, std::max<std::uint64_t>(remaining, 1 << 16)));
             decoder = createStreamDecoder({Method::LZ4, {}, e.size}, backend.get(), batch);
@@ -1818,17 +1825,17 @@ private:
         std::unique_ptr<Backend> backend;
         std::unique_ptr<LockedBackend> locked;
         if (needBackend) {
-            backend = selectBackend(m_options.backend, m_pool, m_options.gpuDevice);
+            backend = selectBackend(decodeBackend(), m_pool, m_options.gpuDevice);
             locked = std::make_unique<LockedBackend>(*backend, backendMutex);
         }
         {
             std::lock_guard<std::mutex> lock(m_state.mutex);
             m_state.backend = backend ? backend->info().name : "CPU (" + std::to_string(m_pool.size()) + " threads)";
         }
-        auto decode = [&](std::size_t f, Backend *b) {
+        auto decode = [&](std::size_t f, Backend *b, bool directWrites) {
             m_state.checkCancel();
             try {
-                decodeFolder(reader, f, folderItems[f], wanted, b);
+                decodeFolder(reader, f, folderItems[f], wanted, b, directWrites);
             } catch (const Cancelled &) {
                 throw;
             } catch (const std::exception &ex) {
@@ -1836,13 +1843,14 @@ private:
             }
         };
         // Small folders in parallel (non-solid archives), big ones one at a
-        // time with the whole backend batch-decoding inside each.
-        m_pool.parallelFor(small.size(), [&](std::size_t k) { decode(small[k], locked.get()); });
-        for (std::size_t f : large) decode(f, locked.get());
+        // time with the whole backend batch-decoding inside each. Only the
+        // latter write big files unbuffered: one such writer at a time.
+        m_pool.parallelFor(small.size(), [&](std::size_t k) { decode(small[k], locked.get(), false); });
+        for (std::size_t f : large) decode(f, locked.get(), true);
     }
 
     void decodeFolder(const SevenZReader &reader, std::size_t folderIndex, const std::vector<std::size_t> &members,
-                      const std::vector<bool> &wanted, Backend *backend)
+                      const std::vector<bool> &wanted, Backend *backend, bool directWrites)
     {
         const SevenZFolder &folder = reader.folders()[folderIndex];
         const auto &items = reader.items();
@@ -1888,7 +1896,8 @@ private:
                     fs::path out;
                     if (prepareFile(it, out)) {
                         m_state.setItem(it.path);
-                        sink = std::make_unique<FileSink>(it, out, !m_options.testOnly);
+                        sink = std::make_unique<FileSink>(it, out, !m_options.testOnly, true,
+                                                          directWrites && it.size >= (std::uint64_t(64) << 20));
                     } else {
                         skipCurrent = true;
                     }

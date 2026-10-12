@@ -77,7 +77,7 @@ Method: every tool compresses the same input from the file cache and writes a re
 | Vyra `.gz` forced on the GPU | 3.53–4.31 s | 1.0–1.3 GiB/s | 25.1–25.2% |
 | **Vyra `.lz4`** (Auto → CPU) | **1.69–1.75 s** | **2.5–2.6 GiB/s** | 28.1% |
 
-Vyra's gzip is **43–49×** faster than 7-Zip's; 7-Zip's slower Deflate search packs tighter. Reading them back: `.gz` decodes serially at ~550 MiB/s (gzip has no block index), `.lz4` in parallel at ~1 GiB/s.
+Vyra's gzip is **43–49×** faster than 7-Zip's; 7-Zip's slower Deflate search packs tighter. Reading them back: `.gz` decodes serially at ~550 MiB/s (gzip has no block index); `.lz4` decodes in parallel at ~2.5 GiB/s and extracts at ~1.4 GiB/s.
 
 ## Usage
 
