@@ -8,7 +8,7 @@
 
 ## Features
 
-- **GPU compression (nvCOMP 5.3)**: Deflate, LZ4 and Zstd in batches of 64 KiB chunks. Without a GPU the same formats are produced on the CPU (zlib-ng / LZ4 / Zstd on all cores).
+- **GPU and CPU engines**: nvCOMP 5.3 on the GPU and zlib-ng / LZ4 / Zstd on all CPU cores produce the same formats (Deflate, LZ4, Zstd in batches of 64 KiB chunks); *Auto* picks the faster one for the machine and the data. Without a GPU everything runs on the CPU.
 - **Standard output**
   | Created as | Opens in |
   |---|---|
@@ -27,9 +27,13 @@
 ## How it works
 
 ```text
-parallel file reads ─▶ 256 MiB batches ─▶ GPU: upload → nvCOMP chunk compression → pack on GPU → download ─▶ ordered writer
-                                          └ CPU: per-chunk CRC32 (concurrently)
+file reads (copy / mapped, prioritised) ─▶ batches ─▶ CPU: CRC32 + compression per chunk (all cores)
+                                                   └▶ GPU: upload → nvCOMP → CRC32, framing, packing on the GPU ─▶ ordered direct-I/O writer
 ```
+
+- **Engine choice**: *Auto* compresses a 1 MiB sample of the input on one CPU thread and estimates what all cores would do. On a many-core CPU the fast codecs (LZ4, Zstd, Deflate level 1) run faster on the CPU than through PCIe; otherwise the GPU path is used, with CUDA start-up (~0.5 s) overlapped by CPU compression ("hybrid"). Jobs under 256 MiB always use the CPU.
+- **GPU path**: up to four batches in flight on three CUDA streams (upload, compute, download); CRC32, Deflate joining, LZ4 framing and packing run on the GPU, the result is written straight into page-locked host memory.
+- **I/O**: archives are written with unbuffered I/O (four writes in flight); big input files are partly memory-mapped, partly copied from the file cache, which together read faster than either alone.
 
 - **Deflate (zip / 7z)**: nvCOMP emits a complete stream per 64 KiB chunk, ending in a `BFINAL` block. Vyra finds the end bit of each chunk's final block, clears `BFINAL` and byte-aligns with an empty stored block (a sync-flush marker, `00 00 FF FF`). The result is **one ordinary Deflate stream** that every inflater accepts (the pigz technique).
 - **LZ4 (7z)**: the raw LZ4 blocks from nvCOMP are wrapped into a standard **LZ4 frame** (independent 64 KiB blocks); incompressible blocks are stored uncompressed.
@@ -37,21 +41,29 @@ parallel file reads ─▶ 256 MiB batches ─▶ GPU: upload → nvCOMP chunk c
 - 7z method ids are the ones registered by 7-Zip-zstd (LZ4 `04F71104`, Zstd `04F71101`).
 - Large inputs are split into solid blocks (default 4 GiB); zip switches to ZIP64 automatically.
 
-## Performance (this version, measured)
+## Performance (v0.2, measured)
 
-Test PC: Xeon E5-2698 v3 (16 cores / 32 threads, 2014), RTX 3090 on PCIe 3.0 x16, Windows 10.
-Data: 4.0 GiB of Qt `.lib` files read from the file cache, output discarded (`vyra-cli bench`, so the disk is not measured).
+Test PC: 2× Xeon E5-2698 v3 (32 cores, 2014) with only 3 memory channels populated, RTX 3090 on PCIe 3.0 x16, WD SN770 NVMe SSD, Windows 10.
+Method: every tool compresses the same input from the file cache and writes a real archive to the NVMe SSD; the time is the whole command (process start to exit), median of 5 interleaved rounds (`7z.exe` and `vyra-cli.exe` alternate, so both see the same background load).
 
-| Method (level 1) | GPU (nvCOMP) | CPU 32 threads | CPU 8 threads | Size GPU / CPU |
+**One 4.0 GiB file** (Qt `.lib` files concatenated)
+
+| Tool / setting | Time | Speed | Archive size | vs 7-Zip fastest |
 |---|---|---|---|---|
-| 7z LZ4 | 1.7–1.8 GiB/s | 2.0–2.1 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
-| 7z Zstd | 1.6–1.7 GiB/s | 2.2–2.4 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
-| zip Deflate | 1.5–1.8 GiB/s | 1.9–2.0 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
+| 7-Zip 26.02 `7z -mx1` (its fastest preset, 32 threads) | 6.81 s | 0.58 GiB/s | 12.2% | 1× |
+| **Vyra `.7z` (default: LZ4)** | **1.31 s** | **3.01 GiB/s** | 27.6% | **5.2×** |
+| Vyra `.7z` Zstd | 1.35 s | 2.92 GiB/s | 18.2% | 5.0× |
+| Vyra `.zip` (Deflate) | 1.48 s | 2.68 GiB/s | 24.4% | 4.6× |
+| Vyra `.7z` LZ4 forced on the GPU (`--gpu`) | 1.76 s | 2.24 GiB/s | 28.9% | 3.9× |
 
-- Writing real archives, this PC's SSD (about 0.7–1 GiB/s) is the limit first.
-- Honest status: on a many-core CPU like this one the first GPU pipeline is **on par with 8 CPU threads and a bit slower than 32**. The GPU backend alone reaches 3.4 GiB/s for LZ4 (256 MiB batches); inside the pipeline it shares memory and PCIe 3.0 bandwidth with file reads and CRCs (see the roadmap). The GPU path uses very little CPU.
-- Zstd runs at a constant speed on the GPU. Reaching a similar ratio on the CPU (level 4 → zstd 12) gives 0.41 GiB/s, so **the GPU is about 4× faster** there.
-- nvCOMP's high-ratio Deflate modes (level 3+) are slower than zlib-ng, so the *automatic* engine uses the CPU for them.
+7-Zip's other presets on the same file (single runs): `7z` default (LZMA2 -mx5) 97.6 s, `zip -mx1` 80.0 s (one file is compressed by one thread), `zip` default 550 s. Against those, Vyra is 50–70× faster.
+
+**A folder of 4,043 files, 2.0 GiB** (Qt `lib` directory, warm cache): 7-Zip `7z -mx1` 7.03 s; Vyra `.7z` LZ4 1.25 s (**5.6×**), Zstd 1.12 s (6.3×), `.zip` 1.48 s (4.8×).
+
+- **Which engine does the work?** On this 32-core machine *Auto* picks the CPU path for these codecs: in a fresh process the GPU path first pays ~0.45 s CUDA start-up, and every byte crosses PCIe 3.0 twice. The GPU engine alone sustains 2.4–2.9 GiB/s here (warm, output discarded); it is the faster choice on CPUs with fewer cores, where Auto selects it (with the CPU compressing during CUDA start-up).
+- The speed comes as much from the I/O path as from the codecs: unbuffered archive writes (2.6 GB/s vs 0.85 GB/s through the cache), input read partly memory-mapped and partly copied with high-priority reader threads, CRC32 computed in the same pass as compression, and no teardown at exit.
+- Archives are bigger than 7-Zip's LZMA2 (27.6% / 18.2% vs 12.2%): Vyra trades ratio for speed. Use Zstd for smaller archives at the same speed.
+- Measured with background load from other programs on the same PC; individual rounds varied between 4.7× and 5.6× for the default setting.
 
 ## Usage
 
@@ -70,7 +82,7 @@ vyra-cli l backup.7z                             # list
 vyra-cli info                                    # GPU status
 vyra-cli bench D:\Data                           # throughput without disk writes
 ```
-Options: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 256m`, `--solid 4g|off`, `-t <threads>`, `--keep` (keep existing files).
+Options: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 64m`, `--solid 4g|off`, `-t <threads>`, `--keep` (keep existing files).
 
 ## Build
 
@@ -85,11 +97,11 @@ Requirements: Visual Studio 2022 (C++), CUDA Toolkit 12.x/13.x, Qt 6.5+ (`msvc20
 
 zlib-ng, LZ4, Zstandard and the LZMA SDK are fetched by CMake and linked statically. `nvcomp64_5.dll` is delay-loaded: without it (or without an NVIDIA driver) Vyra runs in CPU mode.
 
-Tests: `vyra_tests` (format × method × GPU/CPU × batch-size round trips, Deflate joining, path safety, cancellation) and `interop_test.py` (Python zipfile and the official 7-Zip, both directions). See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Tests: `vyra_tests` (format × method × CPU / GPU / mixed CPU+GPU × batch-size round trips, device-side framing with every fast Deflate end-bit result cross-checked, Deflate joining, path safety, cancellation) and `interop_test.py` (Python zipfile and the official 7-Zip, both directions). See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Roadmap
 
-- GPU pipeline: LZ4 framing and Deflate boundary search as GPU kernels, fewer syncs per batch, overlapped downloads
+- GPU engine: keep the CUDA context and buffers alive between jobs (start-up is the GPU's main handicap in one-shot runs); bigger batches without the page-locking cost
 - **Intel / AMD integrated GPU acceleration**: a Vulkan compute or oneAPI/OpenCL backend behind the `Backend` interface
 - MSI installer (WiX, like LMDB Archiver), Windows 11 top-level menu (IExplorerCommand)
 - GPU-parallel extraction of Vyra Deflate archives (chunk index), editing archives (add/delete), AES-256 encryption, split volumes

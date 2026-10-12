@@ -18,29 +18,46 @@
 
 ```cpp
 virtual void compress(Method, int level, const uint8_t *input, const std::vector<Span> &chunks, ChunkOutput &out);
-virtual void decompress(Method, const uint8_t *input, const std::vector<Span> &chunks,
-                        uint8_t *output, const std::vector<Span> &outputs, std::vector<size_t> &actualSizes);
-virtual void *allocateHost(size_t);  // GPU 백엔드는 pinned 메모리
+virtual void compressChecked(...);  // + 입력 범위 CRC32 (CPU는 청크마다 CRC와 압축을 한 번에)
+virtual bool compressFramed(...);   // + 컨테이너 프레이밍과 CRC를 백엔드 안에서 (GPU)
+virtual std::size_t prepareCompress(Method, int level, size_t chunk, size_t batch); // 작업 전 할당
+virtual int concurrency() const;    // 동시에 받을 수 있는 호출 수 (GPU 슬롯 수)
+virtual bool registerHost(void *, size_t); // 이미 쓴 메모리를 page-lock (GPU)
 ```
 
-- `CpuBackend`: 스레드 풀에서 청크별로 zlib-ng / LZ4 / Zstd. Deflate 청크는 `Z_SYNC_FLUSH`로 끝냅니다 (`DeflateShape::SyncFlushed`).
-- `GpuBackend`: 입력 업로드 → nvCOMP 배치 압축 → 크기 다운로드 → GPU에서 패킹 → 압축 바이트만 다운로드. Deflate 청크는 `BFINAL` 블록으로 끝납니다 (`DeflateShape::FinalBlock`).
+- `CpuBackend`: 스레드 풀에서 청크별로 zlib-ng / LZ4 / Zstd. Deflate 청크는 `Z_SYNC_FLUSH`로 끝냅니다 (`DeflateShape::SyncFlushed`). 출력은 최악 크기 슬롯에 그대로 두고(`ChunkOutput::sizes`) 이어 붙이지 않습니다. 소비하는 쪽(프레이밍, 라이터)이 어차피 복사하기 때문입니다.
+- `GpuBackend`: 아래 "GPU 파이프라인" 참조. 프로세스당 장치별로 하나만 만들어 작업 사이에 CUDA 컨텍스트, 장치 버퍼, pinned 블록을 재사용합니다.
 - **Intel/AMD 내장 GPU 백엔드 추가 방법**: 같은 인터페이스를 Vulkan compute 또는 oneAPI/OpenCL로 구현하고 `selectBackend()`에 연결하면 파이프라인·형식 코드는 그대로 씁니다. 출력은 청크마다 표준 raw Deflate / LZ4 block / Zstd frame이면 됩니다.
 
 ## 압축 파이프라인 (`core/archive.cpp`)
 
 1. **스캔**: 입력 경로를 순회해 항목 목록과 전체 크기를 만듭니다. 출력 파일 자신은 건너뜁니다.
-2. **스트림 배정**: zip은 비어 있지 않은 파일마다 스트림 하나, 7z는 솔리드 블록 크기까지 파일을 모아 폴더 하나.
-3. **리더 스레드**: 256 MiB 배치 버퍼(pinned)에 파일 조각을 배치하고 청크(기본 64 KiB)를 자릅니다. 읽기 자체는 배치를 넘길 때 I/O 풀(8스레드)에서 병렬로 수행합니다. `FILE_FLAG_SEQUENTIAL_SCAN`은 파일 캐시를 버리게 만들어 쓰지 않습니다.
-4. **코덱 워커**: 배치를 GPU(또는 CPU 풀)로 압축하고, 동시에 CPU에서 CRC32를 계산합니다.
-5. **후처리 단계**: Deflate 결합 또는 LZ4 프레이밍을 별도 스레드에서 수행해, 그동안 GPU는 다음 배치를 압축합니다.
-6. **라이터**: 배치 순서를 복원(sequence 번호)해 zip 로컬 헤더/데이터 또는 7z 팩 스트림을 기록하고, 끝에 중앙 디렉터리 / 7z 헤더를 씁니다. 임시 파일 `*.vyra-partial`에 쓴 뒤 이름을 바꾸므로 실패·취소 시 기존 파일이 손상되지 않습니다.
+2. **엔진 선택 (Auto)**: 256 MiB 미만 작업은 CPU(CUDA 시작 0.5초가 더 큼). 그 밖에는 가장 큰 파일의 앞 1 MiB를 CPU 1스레드로 압축해 `속도 × 스레드 수 × 0.7`을 GPU 경로의 실제 처리량(약 2 GiB/s, 시작·전송·기록 포함)과 비교합니다. GPU를 쓰면 CUDA 초기화를 백그라운드 스레드에서 바로 시작합니다.
+3. **스트림 배정**: zip은 비어 있지 않은 파일마다 스트림 하나, 7z는 솔리드 블록 크기까지 파일을 모아 폴더 하나.
+4. **리더 스레드**: 배치(GPU 64 MiB, CPU 32 MiB)에 파일 조각을 배치하고 청크(기본 64 KiB)를 자릅니다. 읽기는 I/O 풀(8스레드)에서 4 MiB 조각으로 병렬 수행하며, 리더와 I/O 스레드는 압축보다 높은 우선순위로 돕니다(읽기가 대개 병목).
+   - 입력 버퍼는 일반 페이지라 GPU 준비 전에도 읽기를 시작합니다(최대 1.5 GiB 선행). GPU가 준비되면 리더가 버퍼를 **채우기 직전에** `cudaHostRegister`합니다. 쓰는 중인 메모리를 등록하면 업로드된 데이터가 깨질 수 있습니다(실제로 겪은 버그).
+   - CPU 작업에서 한 파일의 연속 구간인 배치는 일부(60%)를 복사 대신 파일 매핑으로 처리합니다. 매핑은 프로세스 페이지 테이블에서, 복사는 파일 캐시에서 직렬화되므로 섞을 때 가장 빠릅니다. 매핑한 페이지는 I/O 스레드가 미리 건드리고(`PrefetchVirtualMemory`는 작업 집합에 매핑하지 않아 효과가 없었음), 해제는 별도 스레드가 합니다(32 MiB당 약 10 ms).
+5. **코덱 워커**: GPU는 슬롯 수만큼, CPU는 2개. GPU 작업에서는 CPU 워커가 즉시 시작해 CUDA 초기화 동안 압축하고(하이브리드), GPU 워커가 준비되면 합류합니다. 엔진이 섞여도 출력은 유효합니다(LZ4 블록 독립, Deflate 바이트 정렬 비종결 블록, Zstd 다중 프레임).
+6. **후처리 단계**: CPU 배치의 Deflate 결합 / LZ4 프레이밍. GPU 배치는 이미 장치에서 프레이밍되어 그대로 지나갑니다.
+7. **라이터**: 배치 순서를 복원(sequence 번호)해 zip 로컬 헤더/데이터 또는 7z 팩 스트림을 기록합니다. 출력은 직접 I/O(`FILE_FLAG_NO_BUFFERING`, 16 MiB 정렬 블록을 쓰기 스레드 4개가 병렬 기록)로 씁니다. NVMe에서 캐시 경유 쓰기(0.85 GB/s)의 약 3배입니다. 헤더 패치(`writeAt`)는 닫을 때 일반 핸들로 적용합니다. 임시 파일 `*.vyra-partial`에 쓴 뒤 이름을 바꾸므로 실패·취소 시 기존 파일이 손상되지 않습니다.
 
-GPU 관련 실측 메모 (Windows, GeForce = WDDM 드라이버):
+CLI는 작업과 출력이 끝나면 `TerminateProcess`로 바로 끝냅니다. CUDA 컨텍스트, page-locked 메모리, DLL 정리를 건너뛰어 실행당 수백 ms를 아낍니다(`VYRA_CLEAN_EXIT`이면 정상 종료, 프로파일러용).
 
-- `cudaSetDevice()`가 다른 스레드의 `cudaStreamSynchronize()`가 끝날 때까지 대기합니다. 그래서 장치 선택은 스레드당 한 번만 하고(`useDevice`), 대기는 blocking-sync 이벤트로 합니다(`waitStream`).
-- nvCOMP의 크기/정렬 질의는 구성별로 한 번만 호출해 캐시합니다.
-- CUDA 스트림 2개로 배치를 겹치거나, 복사 스트림과 연산 스트림을 나눠 업로드를 겹치는 방식은 WDDM에서 커널끼리 경합해 오히려 느려져서 쓰지 않습니다. 배치를 크게(기본 256 MiB) 잡아 고정 비용을 줄입니다.
+## GPU 파이프라인 (`core/gpubackend.cu`)
+
+- **슬롯**: 배치 하나에 필요한 장치 버퍼(입력, nvCOMP 출력, 패킹 결과, 임시, 메타데이터)와 pinned 메타데이터 블록, 이벤트. 장치 여유 메모리에 맞춰 최대 4개를 쓰고, 하나도 안 들어가면 Auto는 CPU로 갑니다.
+- **스트림 3개**: 업로드, 압축, 다운로드. 코덱 스레드마다 슬롯 하나를 빌려 업로드 → 압축(nvCOMP) → CRC32(`nvcompBatchedCRC32Async`) → Deflate 끝 비트 찾기 → 크기·오프셋 prefix sum → 패킹/프레이밍을 모두 장치에서 실행합니다. 호스트는 결과 블록 한 번만 받습니다.
+- **패킹**: 결과가 호출자의 pinned 출력 버퍼에 들어가면 패킹 커널이 다운로드 스트림에서 PCIe로 직접 씁니다(zero-copy). 압축 스트림은 그동안 다음 배치를 처리하고, 복사 엔진 대기열(업로드 뒤 줄서기)도 거치지 않습니다.
+- **Deflate 끝 비트**: nvCOMP 청크는 정확히 `ceil(끝비트/8)` 바이트입니다. 동적 블록 헤더에서 EOB 부호를 구한 뒤 마지막 바이트의 후보 8곳 중 "EOB 부호 + 0 패딩"에 맞는 곳이 정확히 하나면 그 위치를 씁니다. 아니면 전체 허프만 순회. `VYRA_VERIFY_DEFLATE_SCAN=1`이면 모든 결과를 전체 순회로 교차 검증합니다(테스트는 항상 켬).
+- 입력 버퍼는 업로드가 끝나는 즉시 호출자에게 돌려줍니다(`CompressExtras::inputReleased`).
+
+GPU 관련 실측 메모 (Windows, GeForce = WDDM 드라이버, HAGS 꺼짐):
+
+- `cudaFree`/`cudaFreeHost`는 장치 전체를 동기화합니다. 작업 전에 `prepareCompress`로 모두 할당하고, 실행 중 할당은 0이어야 합니다(`VYRA_PROFILE`이 개수를 출력).
+- WDDM은 명령을 모아서 제출합니다. 큐에 넣은 직후 `cudaStreamQuery`로 즉시 제출시킵니다.
+- `cudaSetDevice()`가 다른 스레드의 `cudaStreamSynchronize()`가 끝날 때까지 대기합니다. 장치 선택은 스레드당 한 번만 하고, 대기는 blocking-sync 이벤트로 합니다.
+- CUDA 시작(cuInit + 컨텍스트) 약 0.45초, `cudaMallocHost` 384 MiB 약 0.2초, 이미 쓴 384 MiB의 `cudaHostRegister`는 7 ms. 파일 매핑 뷰는 등록할 수 없습니다.
+- 작은 배치(64 MiB = 청크 1,024개)에서는 nvCOMP LZ4 커널이 GPU를 다 채우지 못합니다(5 GB/s, 256 MiB에서는 7.8 GB/s). 대신 pinned 메모리와 시작·종료 비용이 줄어 실제 실행에서는 64 MiB가 낫습니다.
 
 버퍼(`ByteBuffer`, `HostBuffer`)와 배치 객체는 재사용하며 0으로 채우지 않습니다. 수백 MiB 단위에서는 초기화와 페이지 폴트가 눈에 띄게 느리기 때문입니다.
 
@@ -84,7 +101,8 @@ nvCOMP의 청크는 각각 완결된 raw Deflate 스트림입니다. ZIP 항목�
 
 ## 진단 도구
 
-- `VYRA_PROFILE=1`: 단계별 시간(읽기/CRC/압축/후처리/기록)과 GPU 업로드/커널/다운로드 시간을 stderr에 출력. `VYRA_PROFILE=2`는 GPU 호출별 타임라인도 출력
+- `VYRA_PROFILE=1`: 프로세스 시작 기준 시각표, 단계별 시간(읽기/압축/후처리/기록), Auto 판단, GPU 슬롯·호출 통계를 stderr에 출력. `VYRA_PROFILE=2`는 배치별·GPU 호출별 타임라인도 출력
+- `VYRA_AUTO=cpu|gpu`: Auto 엔진 판단을 고정, `VYRA_HYBRID=0..3`: 하이브리드 모드(0 끔, 1 GPU 준비 전까지만 CPU, 2 기본, 3 테스트용 혼합)
 - `vyra-cli bench <경로>`: 파일 캐시에서 읽고 출력은 버려 파이프라인만 측정 (AUTO/GPU/CPU)
 - `vyra_backend_bench <파일> [스레드] [MiB]`: I/O 없이 백엔드만 측정
 - `VYRA_SCREENSHOT=<폴더>`: 메인 창과 압축 대화상자를 PNG로 저장하고 종료. `-platform offscreen`과 `QT_QPA_FONTDIR=C:\Windows\Fonts`를 함께 쓰면 화면에 창을 띄우지 않습니다 (`platforms\qoffscreen.dll` 필요).

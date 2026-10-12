@@ -16,7 +16,7 @@ struct CompressOptions {
     BackendKind backend = BackendKind::Auto;
     int gpuDevice = 0;
     std::size_t chunkSize = 64 * 1024;              // independent compression unit
-    std::size_t batchSize = 256u << 20;             // bytes per batch (larger batches amortise GPU syncs)
+    std::size_t batchSize = 0;                      // bytes per batch; 0 = automatic (GPU 256 MiB, CPU 32 MiB)
     std::uint64_t solidBlockSize = 4ull << 30;      // 7z only; 0 = one block per file
     int threads = 0;                                // 0 = all hardware threads
     bool discardOutput = false;                     // benchmark: encode but write nothing

@@ -15,7 +15,9 @@ namespace vyra {
 // concurrent use cannot deadlock.
 class ThreadPool {
 public:
-    explicit ThreadPool(int threads = 0);
+    // aboveNormal: workers get a higher scheduling priority (used for I/O,
+    // so file reads are not starved by compression on a busy machine).
+    explicit ThreadPool(int threads = 0, bool aboveNormal = false);
     ~ThreadPool();
     ThreadPool(const ThreadPool &) = delete;
     ThreadPool &operator=(const ThreadPool &) = delete;
@@ -40,5 +42,8 @@ private:
 };
 
 int defaultThreadCount();
+
+// Raises the calling thread's scheduling priority one step (best effort).
+void raiseThreadPriority();
 
 } // namespace vyra

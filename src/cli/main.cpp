@@ -1,6 +1,7 @@
 // vyra-cli — command-line front end, modelled on 7-Zip's "7z" command.
 #include "core/archive.h"
 #include "core/backend.h"
+#include "core/fileio.h"
 
 #include <algorithm>
 #include <chrono>
@@ -83,7 +84,8 @@ void usage()
         "  --solid <size|off>           7z solid block size (default 4g)\n"
         "  -t <n>                       CPU threads\n"
         "  -o <dir>                     output folder for x\n"
-        "  --keep                       x: do not overwrite existing files\n\n"
+        "  --keep                       x: do not overwrite existing files\n"
+        "  --repeat <n>                 bench: measured runs after one warm-up (median, default 3)\n\n"
         "Compatibility:\n"
         "  .zip (Deflate)  -> Windows Explorer, 7-Zip, any unzip\n"
         "  .7z  Deflate    -> official 7-Zip\n"
@@ -131,6 +133,7 @@ int run(std::vector<std::string> args)
     CompressOptions copt;
     ExtractOptions xopt;
     bool methodGiven = false;
+    int repeat = 3;
     std::string outDir;
     for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string &a = args[i];
@@ -150,6 +153,7 @@ int run(std::vector<std::string> args)
         else if (a == "-o") outDir = value();
         else if (a.rfind("-o", 0) == 0 && a.size() > 2) outDir = a.substr(2);
         else if (a == "--keep") xopt.overwrite = false;
+        else if (a == "--repeat") repeat = std::max(1, std::stoi(value()));
         else if (!a.empty() && a[0] == '-' && a.size() > 1) throw Error("unknown option: " + a);
         else positional.push_back(a);
     }
@@ -178,11 +182,18 @@ int run(std::vector<std::string> args)
                 o.backend = kind;
                 o.discardOutput = true;
                 try {
-                    createArchive(pathFromUtf8("bench.tmp"), inputs, o); // warm-up: file cache, CUDA context
-                    const OperationResult r = createArchive(pathFromUtf8("bench.tmp"), inputs, o);
-                    std::printf("%-4s %-8s %-7s %8.2f GiB/s  ratio %5.1f%%  (%s)\n", label(kind),
-                                methodName(method), formatName(format),
-                                r.seconds > 0 ? double(r.inputBytes) / r.seconds / double(1u << 30) : 0,
+                    // One warm-up (file cache, CUDA context, buffers), then the
+                    // median of `repeat` runs.
+                    createArchive(pathFromUtf8("bench.tmp"), inputs, o);
+                    std::vector<double> speeds;
+                    OperationResult r;
+                    for (int k = 0; k < repeat; ++k) {
+                        r = createArchive(pathFromUtf8("bench.tmp"), inputs, o);
+                        speeds.push_back(r.seconds > 0 ? double(r.inputBytes) / r.seconds / double(1u << 30) : 0);
+                    }
+                    std::sort(speeds.begin(), speeds.end());
+                    std::printf("%-4s %-8s %-7s %8.2f GiB/s  (min %.2f, max %.2f)  ratio %5.1f%%  (%s)\n", label(kind),
+                                methodName(method), formatName(format), speeds[speeds.size() / 2], speeds.front(), speeds.back(),
                                 r.inputBytes ? 100.0 * double(r.outputBytes) / double(r.inputBytes) : 0, r.backend.c_str());
                 } catch (const std::exception &e) {
                     std::printf("%-4s %-8s skipped: %s\n", label(kind), methodName(method), e.what());
@@ -255,8 +266,22 @@ int main(int argc, char **argv)
 {
     std::vector<std::string> args(argv + 1, argv + argc);
 #endif
+    profileMark("main");
+    struct ExitMark { ~ExitMark() { profileMark("main returns"); } } exitMark;
     try {
-        return run(args);
+        const int rc = run(args);
+#ifdef _WIN32
+        // Everything is written and closed by now. Skipping the orderly
+        // teardown (CUDA context, page-locked buffers, DLL detach) saves a
+        // few hundred milliseconds per run; the OS reclaims it all.
+        // (VYRA_CLEAN_EXIT keeps the orderly exit, e.g. for profilers.)
+        std::cout.flush();
+        std::fflush(stdout);
+        std::fflush(stderr);
+        profileMark("exit");
+        if (GetEnvironmentVariableW(L"VYRA_CLEAN_EXIT", nullptr, 0) == 0) TerminateProcess(GetCurrentProcess(), UINT(rc));
+#endif
+        return rc;
     } catch (const Cancelled &) {
         std::cerr << "Cancelled.\n";
         return 3;

@@ -2,12 +2,14 @@
 // joiner, path safety and cancellation. Usage: vyra_tests <work-dir>
 #include "core/archive.h"
 #include "core/backend.h"
+#include "core/crc32.h"
 #include "core/deflatestream.h"
 #include "core/fileio.h"
 #include "core/streamdecoder.h"
 #include "core/threadpool.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -102,10 +104,85 @@ void testDeflateJoin(Backend &backend, ThreadPool &pool)
     CHECK(decoded == data);
 }
 
-void testRoundTrip(const fs::path &work, const fs::path &fixture, Format format, Method method, BackendKind backend, std::size_t batch)
+// Device-side framing (GPU compressFramed): several streams of varied data in
+// one batch, each decoded on its own. Run with VYRA_VERIFY_DEFLATE_SCAN set
+// (main does), so every fast Deflate end-of-block result is cross-checked by
+// the full Huffman walk.
+void testFramed(Backend &backend)
 {
-    const std::string name = std::string(formatName(format)) + "-" + methodName(method) + (backend == BackendKind::Gpu ? "-gpu" : "-cpu") +
-                             "-b" + std::to_string(batch >> 10);
+    std::vector<std::vector<std::uint8_t>> streams;
+    streams.push_back(textLike(5 * 1024 * 1024, 11));
+    streams.push_back(randomBytes(3 * 1024 * 1024 + 123, 12));
+    streams.push_back(textLike(1, 13));
+    streams.push_back(textLike(65536, 14));
+    std::vector<std::uint8_t> dna(7 * 1024 * 1024);
+    std::mt19937 rng(15);
+    for (auto &b : dna) b = std::uint8_t("ACGT"[rng() % 4]);
+    streams.push_back(dna);
+    streams.push_back(std::vector<std::uint8_t>(2 * 1024 * 1024 + 77, 0));
+    std::vector<std::uint8_t> input;
+    std::vector<Span> chunks;
+    std::vector<std::uint8_t> starts, ends;
+    std::vector<std::size_t> firstChunk;
+    for (const auto &st : streams) {
+        input.resize((input.size() + 255) & ~std::size_t(255));
+        const std::size_t base = input.size();
+        input.insert(input.end(), st.begin(), st.end());
+        firstChunk.push_back(chunks.size());
+        for (std::size_t off = 0; off < st.size(); off += 65536) {
+            chunks.push_back({base + off, std::min<std::size_t>(65536, st.size() - off)});
+            starts.push_back(off == 0);
+            ends.push_back(off + 65536 >= st.size());
+        }
+    }
+    firstChunk.push_back(chunks.size());
+    for (Method method : {Method::Deflate, Method::LZ4, Method::Zstd}) {
+        CompressExtras extras;
+        extras.streamStart = &starts;
+        extras.streamEnd = &ends;
+        extras.lz4BlockMaximum = 65536;
+        std::vector<Span> ranges;
+        for (std::size_t k = 0; k < streams.size(); ++k)
+            ranges.push_back({chunks[firstChunk[k]].offset, streams[k].size()});
+        std::vector<std::uint32_t> crcs;
+        extras.crcRanges = &ranges;
+        extras.crcs = &crcs;
+        ChunkOutput out;
+        try {
+            CHECK(backend.compressFramed(method, 1, input.data(), chunks, extras, out));
+        } catch (const std::exception &e) {
+            ++g_failures;
+            std::cerr << "FAIL framed " << methodName(method) << ": " << e.what() << "\n";
+            continue;
+        }
+        CHECK(crcs.size() == streams.size());
+        for (std::size_t k = 0; k < streams.size(); ++k) {
+            const std::size_t from = out.offsets[firstChunk[k]], to = out.offsets[firstChunk[k + 1]];
+            auto decoder = createStreamDecoder({method, {}, streams[k].size()}, nullptr, 0);
+            std::vector<std::uint8_t> decoded;
+            decoder->feed(out.data.data() + from, to - from, true,
+                          [&](const std::uint8_t *p, std::size_t n) { decoded.insert(decoded.end(), p, p + n); });
+            if (decoded != streams[k]) std::cerr << "  framed " << methodName(method) << " stream " << k << " differs\n";
+            CHECK(decoded == streams[k]);
+            if (k < crcs.size()) CHECK(crcs[k] == crc32(streams[k].data(), streams[k].size()));
+        }
+        std::cout << "ok   framed " << methodName(method) << "\n";
+    }
+}
+
+void setEnv(const char *name, const char *value)
+{
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+void testRoundTrip(const fs::path &work, const fs::path &fixture, Format format, Method method, BackendKind backend, std::size_t batch,
+                   const std::string &tag)
+{
+    const std::string name = std::string(formatName(format)) + "-" + methodName(method) + "-" + tag + "-b" + std::to_string(batch >> 10);
     const fs::path archive = work / (name + (format == Format::Zip ? ".zip" : ".7z"));
     const fs::path out = work / (name + "-out");
     fs::remove_all(out);
@@ -123,8 +200,21 @@ void testRoundTrip(const fs::path &work, const fs::path &fixture, Format format,
         const OperationResult r = extractArchive(archive, out, x);
         CHECK(r.warnings.empty());
         for (const auto &w : r.warnings) std::cerr << "  warning: " << w << "\n";
-        const bool same = snapshot(fixture) == snapshot(out / fixture.filename());
-        if (!same) std::cerr << "  mismatch in " << name << "\n";
+        const auto expected = snapshot(fixture), actual = snapshot(out / fixture.filename());
+        const bool same = expected == actual;
+        if (!same) {
+            std::cerr << "  mismatch in " << name << "\n";
+            for (const auto &[path, data] : expected) {
+                auto it = actual.find(path);
+                if (it == actual.end()) { std::cerr << "    missing " << path << "\n"; continue; }
+                if (it->second == data) continue;
+                std::size_t at = 0;
+                while (at < data.size() && at < it->second.size() && data[at] == it->second[at]) ++at;
+                std::cerr << "    differs " << path << ": size " << data.size() << " vs " << it->second.size() << ", first difference at " << at << "\n";
+            }
+            for (const auto &[path, data] : actual)
+                if (!expected.count(path)) std::cerr << "    extra " << path << "\n";
+        }
         CHECK(same);
         ExtractOptions t;
         t.testOnly = true;
@@ -182,6 +272,7 @@ void testSafePaths()
 
 int main(int argc, char **argv)
 {
+    setEnv("VYRA_VERIFY_DEFLATE_SCAN", "1"); // before the GPU backend is created
     const fs::path work = argc > 1 ? fs::path(argv[1]) : fs::temp_directory_path() / "vyra-tests";
     fs::create_directories(work);
     const fs::path fixture = work / "fixture";
@@ -193,20 +284,30 @@ int main(int argc, char **argv)
     testDeflateJoin(*cpu, pool);
     std::string reason;
     auto gpu = createGpuBackend(0, &reason);
-    if (gpu) testDeflateJoin(*gpu, pool);
+    if (gpu) {
+        testDeflateJoin(*gpu, pool);
+        testFramed(*gpu);
+    }
     else std::cout << "GPU tests skipped: " << reason << "\n";
 
-    std::vector<BackendKind> backends = {BackendKind::Cpu};
-    if (gpu) backends.push_back(BackendKind::Gpu);
+    // CPU only; GPU only (no CPU worker); GPU + CPU worker (hybrid, the
+    // default with a GPU, where both engines' output mixes in one stream).
+    struct Pass { BackendKind backend; const char *hybrid; const char *tag; };
+    std::vector<Pass> passes = {{BackendKind::Cpu, "2", "cpu"}};
+    if (gpu) {
+        passes.push_back({BackendKind::Gpu, "0", "gpu"});
+        passes.push_back({BackendKind::Gpu, "3", "mixed"}); // CPU and GPU batches in one stream
+    }
     gpu.reset();
-    for (BackendKind b : backends) {
+    for (const Pass &p : passes) {
+        setEnv("VYRA_HYBRID", p.hybrid);
         for (std::size_t batch : {std::size_t(128u << 20), std::size_t(256u << 10)}) {
-            testRoundTrip(work, fixture, Format::Zip, Method::Deflate, b, batch);
-            testRoundTrip(work, fixture, Format::Zip, Method::Store, b, batch);
-            testRoundTrip(work, fixture, Format::SevenZip, Method::LZ4, b, batch);
-            testRoundTrip(work, fixture, Format::SevenZip, Method::Zstd, b, batch);
-            testRoundTrip(work, fixture, Format::SevenZip, Method::Deflate, b, batch);
-            testRoundTrip(work, fixture, Format::SevenZip, Method::Store, b, batch);
+            testRoundTrip(work, fixture, Format::Zip, Method::Deflate, p.backend, batch, p.tag);
+            testRoundTrip(work, fixture, Format::Zip, Method::Store, p.backend, batch, p.tag);
+            testRoundTrip(work, fixture, Format::SevenZip, Method::LZ4, p.backend, batch, p.tag);
+            testRoundTrip(work, fixture, Format::SevenZip, Method::Zstd, p.backend, batch, p.tag);
+            testRoundTrip(work, fixture, Format::SevenZip, Method::Deflate, p.backend, batch, p.tag);
+            testRoundTrip(work, fixture, Format::SevenZip, Method::Store, p.backend, batch, p.tag);
         }
     }
     testSelectionAndCancel(work, fixture);

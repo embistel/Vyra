@@ -1,4 +1,5 @@
 #include "core/backend.h"
+#include "core/crc32.h"
 
 #include <algorithm>
 #include <cstring>
@@ -62,6 +63,14 @@ void ByteBuffer::release()
 }
 
 void *Backend::allocateHost(std::size_t bytes) { return ::operator new(bytes ? bytes : 1); }
+
+void Backend::compressChecked(Method method, int level, const std::uint8_t *input, const std::vector<Span> &chunks,
+                              const std::vector<Span> &crcRanges, std::vector<std::uint32_t> &crcs, ChunkOutput &output)
+{
+    crcs.resize(crcRanges.size());
+    for (std::size_t i = 0; i < crcRanges.size(); ++i) crcs[i] = crc32(input + crcRanges[i].offset, crcRanges[i].size);
+    compress(method, level, input, chunks, output);
+}
 void Backend::freeHost(void *pointer) { ::operator delete(pointer); }
 
 void HostBuffer::reset(Backend &backend, std::size_t bytes)

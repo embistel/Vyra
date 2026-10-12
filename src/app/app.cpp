@@ -18,11 +18,27 @@
 #include <QTimer>
 #include <QUrl>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace {
 bool koreanUi()
 {
     const QString lang = QSettings().value(QStringLiteral("ui/language"), QStringLiteral("auto")).toString();
     return lang == QStringLiteral("ko") || (lang == QStringLiteral("auto") && QLocale().language() == QLocale::Korean);
+}
+
+// An Explorer verb's process has nothing left to do after its job: settings
+// are flushed, then the orderly teardown (CUDA context, page-locked buffers,
+// DLL detach), which takes a few hundred milliseconds, is skipped.
+int finishVerb(int result)
+{
+    QSettings().sync();
+#ifdef Q_OS_WIN
+    TerminateProcess(GetCurrentProcess(), UINT(result));
+#endif
+    return result;
 }
 
 // Explorer verbs. Each may receive many paths (multi-selection is collected
@@ -95,7 +111,7 @@ int App::run(QApplication &application)
         application.setQuitOnLastWindowClosed(false);
         const auto collected = collectInvocations(verb, paths);
         if (!collected) return 0; // handed over to the collecting process
-        return runVerb(verb, *collected);
+        return finishVerb(runVerb(verb, *collected));
     }
 
     MainWindow window;

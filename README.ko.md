@@ -8,7 +8,7 @@
 
 ## 주요 기능
 
-- **GPU 압축 (nvCOMP 5.3)**: Deflate · LZ4 · Zstd를 64 KiB 청크 단위로 GPU에서 일괄 압축. GPU가 없으면 같은 형식을 CPU(zlib-ng / LZ4 / Zstd, 전 코어)로 만듭니다.
+- **GPU·CPU 엔진**: GPU의 nvCOMP 5.3과 전 코어 CPU(zlib-ng / LZ4 / Zstd)가 같은 형식(Deflate · LZ4 · Zstd, 64 KiB 청크 단위)을 만들고, *자동*이 그 PC와 데이터에 더 빠른 쪽을 고릅니다. GPU가 없으면 모두 CPU로 처리합니다.
 - **표준 형식 출력**
   | 만든 형식 | 열 수 있는 프로그램 |
   |---|---|
@@ -27,9 +27,13 @@
 ## 동작 원리
 
 ```text
-파일 읽기(병렬 I/O) ─▶ 256 MiB 배치 ─▶ GPU: 업로드 → nvCOMP 청크 압축 → GPU에서 패킹 → 다운로드 ─▶ 순서대로 기록
-                                       └ CPU: 청크별 CRC32 (동시에)
+파일 읽기(복사 / 매핑, 높은 우선순위) ─▶ 배치 ─▶ CPU: 청크마다 CRC32 + 압축 (모든 코어)
+                                              └▶ GPU: 업로드 → nvCOMP → CRC32·프레이밍·패킹도 GPU에서 ─▶ 순서대로 직접 I/O 기록
 ```
+
+- **엔진 선택**: *자동*은 입력 앞부분 1 MiB를 CPU 1스레드로 압축해 전체 코어의 처리량을 추정합니다. 코어가 많은 CPU에서는 빠른 코덱(LZ4, Zstd, Deflate 수준 1)이 PCIe를 오가는 GPU보다 CPU에서 더 빠르고, 그렇지 않으면 GPU 경로를 씁니다. GPU를 쓸 때는 CUDA 시작(약 0.5초) 동안 CPU가 먼저 압축합니다(하이브리드). 256 MiB 미만 작업은 항상 CPU로 처리합니다.
+- **GPU 경로**: CUDA 스트림 3개(업로드·압축·다운로드)에 배치 최대 4개를 동시에 흘립니다. CRC32, Deflate 결합, LZ4 프레이밍, 패킹을 GPU에서 끝내고 결과를 page-locked 호스트 메모리에 바로 씁니다.
+- **입출력**: 아카이브는 직접 I/O(쓰기 4개 동시)로 기록합니다. 큰 입력 파일은 일부는 메모리 매핑, 일부는 파일 캐시 복사로 읽습니다. 둘을 섞는 편이 한쪽만 쓰는 것보다 빠릅니다.
 
 - **Deflate (zip / 7z)**: nvCOMP는 64 KiB 청크마다 `BFINAL=1`인 완결된 Deflate 스트림을 냅니다. Vyra는 각 청크의 마지막 블록 끝 비트 위치를 찾아 `BFINAL`을 지우고 빈 stored 블록(sync-flush 마커, `00 00 FF FF`)으로 바이트 정렬해 이어 붙입니다. 결과는 **하나의 정상적인 Deflate 스트림**이라 어떤 압축 해제기도 그대로 풉니다 (pigz와 같은 방식).
 - **LZ4 (7z)**: nvCOMP가 만든 raw LZ4 블록을 표준 **LZ4 Frame**(독립 블록, 64 KiB 블록)으로 감쌉니다. 압축이 안 되는 블록은 비압축 블록으로 저장합니다.
@@ -37,21 +41,29 @@
 - 7z 메서드 ID는 7-Zip-zstd가 등록한 값(LZ4 `04F71104`, Zstd `04F71101`)을 사용합니다.
 - 큰 입력은 솔리드 블록(기본 4 GiB) 단위로 나눠 7z 폴더를 만들고, zip은 ZIP64를 자동 사용합니다.
 
-## 성능 (현재 버전 실측)
+## 성능 (v0.2 실측)
 
-테스트 PC: Xeon E5-2698 v3 (16코어/32스레드, 2014년), RTX 3090 (PCIe 3.0 x16), Windows 10.
-데이터: Qt `.lib` 파일 4.0 GiB, 파일 캐시에서 읽고 출력은 버림(`vyra-cli bench`, 디스크 영향 제외).
+테스트 PC: Xeon E5-2698 v3 2개(32코어, 2014년, 메모리 채널 3개만 장착), RTX 3090 (PCIe 3.0 x16), WD SN770 NVMe SSD, Windows 10.
+방법: 모든 도구가 같은 입력을 파일 캐시에서 읽어 NVMe SSD에 실제 아카이브를 씁니다. 시간은 명령 전체(프로세스 시작부터 종료까지)이며, 5라운드 교차 실행의 중앙값입니다(`7z.exe`와 `vyra-cli.exe`를 번갈아 실행해 같은 배경 부하를 받음).
 
-| 방식 (수준 1) | GPU (nvCOMP) | CPU 32스레드 | CPU 8스레드 | 압축 후 크기 GPU / CPU |
+**4.0 GiB 단일 파일** (Qt `.lib` 파일을 이어 붙인 것)
+
+| 도구 / 설정 | 시간 | 속도 | 압축 후 크기 | 7-Zip 최고속 대비 |
 |---|---|---|---|---|
-| 7z LZ4 | 1.7–1.8 GiB/s | 2.0–2.1 GiB/s | 1.64 GiB/s | 31.1% / 27.6% |
-| 7z Zstd | 1.6–1.7 GiB/s | 2.2–2.4 GiB/s | 1.47 GiB/s | 17.8% / 18.2% |
-| zip Deflate | 1.5–1.8 GiB/s | 1.9–2.0 GiB/s | 1.15 GiB/s | 25.6% / 24.4% |
+| 7-Zip 26.02 `7z -mx1` (가장 빠른 설정, 32스레드) | 6.81 s | 0.58 GiB/s | 12.2% | 1배 |
+| **Vyra `.7z` (기본: LZ4)** | **1.31 s** | **3.01 GiB/s** | 27.6% | **5.2배** |
+| Vyra `.7z` Zstd | 1.35 s | 2.92 GiB/s | 18.2% | 5.0배 |
+| Vyra `.zip` (Deflate) | 1.48 s | 2.68 GiB/s | 24.4% | 4.6배 |
+| Vyra `.7z` LZ4, GPU 강제(`--gpu`) | 1.76 s | 2.24 GiB/s | 28.9% | 3.9배 |
 
-- 실제 파일로 쓰는 경우에는 이 PC의 SSD 쓰기 속도(약 0.7–1 GiB/s)가 먼저 한계에 닿습니다.
-- 솔직한 현황: 이 PC처럼 코어가 많은 CPU에서는 1차 버전의 GPU 경로가 **8스레드 CPU와 비슷하고 32스레드 CPU보다 약간 느립니다**. GPU 백엔드만 단독 측정하면 LZ4 3.4 GiB/s(256 MiB 배치)까지 나오지만, 파이프라인 안에서는 파일 읽기·CRC와 메모리/PCIe 3.0 대역을 나눠 쓰면서 낮아집니다(아래 로드맵 참고). GPU 경로는 CPU 사용량이 매우 적다는 장점이 있습니다.
-- Zstd는 GPU가 수준과 무관하게 일정한 속도를 냅니다. 비슷한 압축률을 CPU로 내면(수준 4 → zstd 12) 0.41 GiB/s로, **GPU가 약 4배 빠릅니다**.
-- nvCOMP의 고압축 Deflate(수준 3 이상)는 CPU(zlib-ng)보다 느려서, *자동* 엔진은 이 경우 CPU를 사용합니다.
+같은 파일에서 7-Zip의 다른 설정(1회 측정): `7z` 기본값(LZMA2 -mx5) 97.6초, `zip -mx1` 80.0초(파일 하나는 스레드 하나로 압축), `zip` 기본값 550초. 이들과 비교하면 Vyra가 50–70배 빠릅니다.
+
+**파일 4,043개, 2.0 GiB 폴더** (Qt `lib` 폴더, 캐시에 있는 상태): 7-Zip `7z -mx1` 7.03초, Vyra `.7z` LZ4 1.25초(**5.6배**), Zstd 1.12초(6.3배), `.zip` 1.48초(4.8배).
+
+- **어느 엔진이 일하나?** 이 32코어 PC에서는 *자동*이 이 코덱들에 CPU 경로를 고릅니다. 새 프로세스에서 GPU 경로는 CUDA 시작에 약 0.45초를 먼저 쓰고, 모든 데이터가 PCIe 3.0을 두 번 지나기 때문입니다. GPU 엔진 단독으로는 여기서 2.4–2.9 GiB/s(데워진 상태, 출력 버림)를 냅니다. 코어가 적은 CPU에서는 GPU가 더 빠르고, 그 경우 자동이 GPU를 고릅니다(CUDA 시작 동안에는 CPU가 먼저 압축).
+- 속도는 코덱만큼 입출력 경로에서 나옵니다: 아카이브 직접 I/O 기록(캐시 경유 0.85 GB/s 대비 2.6 GB/s), 입력은 일부 메모리 매핑·일부 복사로 높은 우선순위 스레드가 읽기, CRC32를 압축과 같은 패스에서 계산, 종료 시 정리 생략.
+- 압축 후 크기는 7-Zip LZMA2보다 큽니다(27.6% / 18.2% 대 12.2%). 속도를 위해 압축률을 양보한 설계입니다. 같은 속도로 더 작게 만들려면 Zstd를 쓰세요.
+- 같은 PC의 다른 프로그램 부하가 있는 상태에서 측정했습니다. 기본 설정의 라운드별 배율은 4.7–5.6배였습니다.
 
 ## 사용법
 
@@ -70,7 +82,7 @@ vyra-cli l backup.7z                             # 목록
 vyra-cli info                                    # GPU 상태
 vyra-cli bench D:\Data                           # 디스크 제외 처리량 측정
 ```
-옵션: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 256m`, `--solid 4g|off`, `-t <스레드>`, `--keep`(기존 파일 유지).
+옵션: `-m lz4|zstd|deflate|store`, `-l 0-5`, `--gpu`/`--cpu`, `--chunk 64k`, `--batch 64m`, `--solid 4g|off`, `-t <스레드>`, `--keep`(기존 파일 유지).
 
 ## 빌드
 
@@ -85,11 +97,11 @@ vyra-cli bench D:\Data                           # 디스크 제외 처리량 �
 
 zlib-ng · LZ4 · Zstandard · LZMA SDK는 CMake가 자동으로 받아 정적으로 링크합니다. `nvcomp64_5.dll`은 지연 로드되므로 DLL이나 NVIDIA 드라이버가 없어도 프로그램은 CPU 모드로 실행됩니다.
 
-테스트: `vyra_tests`(형식 × 방식 × GPU/CPU × 배치 크기 왕복, Deflate 결합, 경로 안전성, 취소)와 `interop_test.py`(Python zipfile, 공식 7-Zip과 양방향 호환). 자세한 구조는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+테스트: `vyra_tests`(형식 × 방식 × CPU / GPU / CPU+GPU 혼합 × 배치 크기 왕복, GPU 프레이밍과 Deflate 끝 비트 빠른 경로 교차 검증, Deflate 결합, 경로 안전성, 취소)와 `interop_test.py`(Python zipfile, 공식 7-Zip과 양방향 호환). 자세한 구조는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 로드맵
 
-- GPU 파이프라인 최적화: LZ4 프레이밍·Deflate 경계 탐색을 GPU 커널로, 배치 간 동기화 제거, 다운로드 겹치기
+- GPU 엔진: 작업 사이에 CUDA 컨텍스트와 버퍼 유지(한 번 실행하는 작업에서 GPU의 가장 큰 불리함은 시작 비용), page-lock 비용 없이 큰 배치
 - **Intel / AMD 내장 그래픽 가속**: `Backend` 인터페이스에 Vulkan compute 또는 oneAPI/OpenCL 백엔드 추가
 - MSI 설치 프로그램(WiX, LMDB Archiver와 동일한 구성), Windows 11 최상위 메뉴(IExplorerCommand)
 - Vyra가 만든 Deflate 압축의 GPU 병렬 해제(청크 인덱스), 압축 파일 편집(추가/삭제), 암호화(AES-256), 분할 압축

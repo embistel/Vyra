@@ -278,6 +278,7 @@ void joinDeflateChunks(ChunkOutput &chunks, const std::vector<std::uint8_t> &str
     });
     std::swap(chunks.offsets, joined.offsets);
     chunks.data.swap(joined.data);
+    chunks.sizes.clear(); // joined output is contiguous
 }
 
 } // namespace vyra

@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <future>
 #include <optional>
 #include <set>
 #include <thread>
@@ -29,7 +30,8 @@ namespace vyra {
 namespace {
 
 using Clock = std::chrono::steady_clock;
-constexpr std::size_t kReadPiece = 8u << 20;
+// Reads are split into pieces so a batch keeps every I/O thread busy.
+constexpr std::size_t kReadPiece = 4u << 20;
 
 std::string lowerAscii(std::string s)
 {
@@ -66,6 +68,20 @@ public:
         m_closed = true;
         m_notEmpty.notify_all();
         m_notFull.notify_all();
+    }
+    std::size_t size()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_items.size();
+    }
+    std::optional<T> tryPop()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_items.empty()) return std::nullopt;
+        T value = std::move(m_items.front());
+        m_items.pop_front();
+        m_notFull.notify_one();
+        return value;
     }
 
 private:
@@ -252,10 +268,14 @@ struct Batch {
         segments.clear();
         segmentCrc.clear();
         reads.clear();
-        output.data.clear();
-        output.offsets.clear();
+        output.clear();
+        framed = false;
+        unmapFileView(view);
     }
     std::uint64_t sequence = 0;
+    bool framed = false; // output already carries the container framing
+    FileView view;       // data maps the file directly (CPU jobs, big files)
+    double stamps[6] = {}; // VYRA_PROFILE=2: planned, read, codec start/end, posted, written
     DeflateShape shape = DeflateShape::SyncFlushed;
     int buffer = -1;
     std::uint8_t *data = nullptr;
@@ -269,21 +289,90 @@ struct Batch {
     ChunkOutput output;
 };
 
+// Segment CRCs are computed in pieces of at most 4 MiB (in parallel, on the
+// CPU or the GPU) and combined per segment.
+struct CrcPieces {
+    std::vector<Span> ranges;
+    std::vector<std::size_t> segment;
+    std::vector<std::uint32_t> crcs;
+};
+
+void planCrcPieces(const Batch &b, CrcPieces &p)
+{
+    constexpr std::size_t kPiece = 4u << 20;
+    p.ranges.clear();
+    p.segment.clear();
+    p.crcs.clear();
+    for (std::size_t s = 0; s < b.segments.size(); ++s)
+        for (std::size_t off = 0; off < b.segments[s].size; off += kPiece) {
+            p.ranges.push_back({b.segments[s].offset + off, std::min(kPiece, b.segments[s].size - off)});
+            p.segment.push_back(s);
+        }
+}
+
+// The same, but pieces never cross a chunk boundary, so a CPU backend can
+// checksum each piece together with compressing its chunk.
+void planChunkCrcPieces(const Batch &b, CrcPieces &p)
+{
+    p.ranges.clear();
+    p.segment.clear();
+    p.crcs.clear();
+    std::size_t c = 0;
+    for (std::size_t s = 0; s < b.segments.size(); ++s) {
+        std::size_t off = b.segments[s].offset;
+        const std::size_t end = off + b.segments[s].size;
+        while (off < end) {
+            while (c < b.chunks.size() && b.chunks[c].offset + b.chunks[c].size <= off) ++c;
+            if (c == b.chunks.size()) throw Error("internal error: segment outside the chunks");
+            const std::size_t pieceEnd = std::min(end, b.chunks[c].offset + b.chunks[c].size);
+            p.ranges.push_back({off, pieceEnd - off});
+            p.segment.push_back(s);
+            off = pieceEnd;
+        }
+    }
+}
+
+void combineCrcPieces(Batch &b, const CrcPieces &p)
+{
+    b.segmentCrc.assign(b.segments.size(), 0);
+    for (std::size_t i = 0; i < p.ranges.size(); ++i) {
+        auto &c = b.segmentCrc[p.segment[i]];
+        c = crc32Combine(c, p.crcs[i], p.ranges[i].size);
+    }
+}
+
+// Input staging memory: plain pages, so files can be read while the GPU is
+// still starting up; registered with the backend (page-locked) once it is
+// there, so uploads run as direct DMA.
+class InputBuffer {
+public:
+    explicit InputBuffer(std::size_t bytes) : m_data(static_cast<std::uint8_t *>(allocatePages(bytes))), m_size(bytes) {}
+    ~InputBuffer()
+    {
+        if (m_registered) m_registered->unregisterHost(m_data);
+        freePages(m_data);
+    }
+    InputBuffer(const InputBuffer &) = delete;
+    InputBuffer &operator=(const InputBuffer &) = delete;
+    std::uint8_t *data() const { return m_data; }
+    void registerWith(Backend &backend)
+    {
+        if (!m_registered && backend.registerHost(m_data, m_size)) m_registered = &backend;
+    }
+
+private:
+    std::uint8_t *m_data;
+    std::size_t m_size;
+    Backend *m_registered = nullptr;
+};
+
 void computeSegmentCrcs(Batch &b, ThreadPool &pool)
 {
-    struct Piece { std::size_t segment, offset, size; };
-    std::vector<Piece> pieces;
-    constexpr std::size_t kPiece = 4u << 20;
-    for (std::size_t s = 0; s < b.segments.size(); ++s)
-        for (std::size_t off = 0; off < b.segments[s].size; off += kPiece)
-            pieces.push_back({s, b.segments[s].offset + off, std::min(kPiece, b.segments[s].size - off)});
-    std::vector<std::uint32_t> crcs(pieces.size());
-    pool.parallelFor(pieces.size(), [&](std::size_t i) { crcs[i] = crc32(b.data + pieces[i].offset, pieces[i].size); });
-    b.segmentCrc.assign(b.segments.size(), 0);
-    for (std::size_t i = 0; i < pieces.size(); ++i) {
-        auto &c = b.segmentCrc[pieces[i].segment];
-        c = crc32Combine(c, crcs[i], pieces[i].size);
-    }
+    CrcPieces p;
+    planCrcPieces(b, p);
+    p.crcs.resize(p.ranges.size());
+    pool.parallelFor(p.ranges.size(), [&](std::size_t i) { p.crcs[i] = crc32(b.data + p.ranges[i].offset, p.ranges[i].size); });
+    combineCrcPieces(b, p);
 }
 
 // Wraps raw LZ4 blocks into LZ4 frames (header at stream start, end mark at
@@ -306,6 +395,23 @@ void frameLz4(Batch &b, std::size_t blockMaximum, ThreadPool &pool, ChunkOutput 
     });
     std::swap(b.output.offsets, framed.offsets);
     b.output.data.swap(framed.data);
+    b.output.sizes.clear(); // framed output is contiguous
+}
+
+// Parallel reads out of the file cache (copies or page mapping) stop scaling
+// at a few threads (kernel locks); more only take cores from compression.
+int ioThreadCount() { return std::min(8, defaultThreadCount()); }
+
+// Hands chunks [from, to) to `write`, merging runs that are adjacent in
+// memory (all of them for contiguous output).
+template<class Fn> void writeChunks(const ChunkOutput &out, std::size_t from, std::size_t to, Fn write)
+{
+    while (from < to) {
+        const std::uint8_t *start = out.chunk(from);
+        std::size_t size = out.chunkSize(from);
+        while (++from < to && out.chunk(from) == start + size) size += out.chunkSize(from);
+        if (size) write(start, size);
+    }
 }
 
 // Per-stage wall time, printed to stderr when VYRA_PROFILE is set.
@@ -330,13 +436,25 @@ public:
         const fs::path temp = fs::path(m_archive).concat(".vyra-partial");
         try {
             result.seconds = runWithProgress(m_state, progress, [&] {
+                profileMark("job start");
+                const auto t0 = Clock::now();
                 m_items = scanInputs(inputs, m_archive, m_state, result.warnings);
-                prepare();
+                startBackend();
+                const auto t1 = Clock::now();
+                prepareLayout();
+                const auto t2 = Clock::now();
                 m_state.phase = int(Phase::Compressing);
-                m_out.create(m_options.discardOutput ? nullDevice() : temp);
+                m_out.create(m_options.discardOutput ? nullDevice() : temp, !m_options.discardOutput);
                 pipeline();
+                profileMark("pipeline done");
+                const auto t3 = Clock::now();
                 m_state.phase = int(Phase::Finalizing);
                 m_out.close();
+                if (std::getenv("VYRA_PROFILE")) {
+                    auto sec = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count(); };
+                    std::fprintf(stderr, "[profile] scan %.3fs prepare %.3fs pipeline %.3fs close %.3fs\n", sec(t0, t1), sec(t1, t2),
+                                 sec(t2, t3), sec(t3, Clock::now()));
+                }
                 if (m_options.discardOutput) return;
                 std::error_code ec;
                 fs::rename(temp, m_archive, ec);
@@ -362,35 +480,107 @@ public:
     }
 
 private:
-    void prepare()
+    // Starts the GPU backend in the background when the job may use it: CUDA
+    // start-up takes about half a second, during which the input is scanned
+    // and the first batches are read.
+    void startBackend()
     {
         const Method method = m_options.method;
         if (!methodSupportedFor(m_options.format, method)) throw Error(std::string(methodName(method)) + " is not available for this format");
+        // nvCOMP's high-ratio Deflate modes are much slower than zlib-ng on
+        // a multi-core CPU, so Auto keeps those levels on the CPU.
+        const bool cpuOnly = method == Method::Store || m_options.backend == BackendKind::Cpu ||
+                             (m_options.backend == BackendKind::Auto && method == Method::Deflate && m_options.level >= 3);
+        m_wantGpu = !cpuOnly && (m_options.backend == BackendKind::Gpu || gpuLikelyFaster());
+        if (!m_wantGpu) return;
+        const int device = m_options.gpuDevice;
+        m_gpuInit = std::async(std::launch::async, [device] {
+            std::string reason;
+            std::unique_ptr<Backend> gpu = createGpuBackend(device, &reason);
+            return std::make_pair(std::move(gpu), reason);
+        });
+    }
+
+    // Auto engine choice. Small jobs: CUDA start-up (~0.5 s) would dominate.
+    // Otherwise compress a sample of the actual input on one CPU thread and
+    // scale by the thread count: a many-core CPU outruns the GPU pipeline
+    // for fast codecs (the GPU path also pays PCIe transfers and start-up).
+    bool gpuLikelyFaster()
+    {
+        if (const char *e = std::getenv("VYRA_AUTO")) return std::string(e) == "gpu"; // tuning / tests
+        constexpr std::uint64_t kSmallJob = std::uint64_t(256) << 20;
+        if (m_state.bytesTotal < kSmallJob) return false;
+        // Sample: up to 1 MiB from the start of the largest file.
+        const Item *largest = nullptr;
+        for (const Item &item : m_items)
+            if (!item.directory && (!largest || item.size > largest->size)) largest = &item;
+        if (!largest || largest->size < 65536) return false;
+        const std::size_t sampleSize = std::size_t(std::min<std::uint64_t>(largest->size, std::uint64_t(1) << 20)) & ~std::size_t(65535);
+        std::vector<std::uint8_t> sample(sampleSize);
+        if (readFileRange(largest->source, 0, sample.data(), sampleSize) != sampleSize) return true;
+        std::vector<Span> chunks;
+        for (std::size_t off = 0; off < sampleSize; off += 65536) chunks.push_back({off, 65536});
+        ThreadPool single(1);
+        auto cpu = createCpuBackend(single);
+        ChunkOutput out;
+        cpu->compress(m_options.method, m_options.level, sample.data(), chunks, out); // warm up
+        double seconds = 1e9; // best of two: other load on the machine only adds time
+        for (int round = 0; round < 2; ++round) {
+            const auto start = Clock::now();
+            cpu->compress(m_options.method, m_options.level, sample.data(), chunks, out);
+            seconds = std::min(seconds, std::max(1e-6, std::chrono::duration<double>(Clock::now() - start).count()));
+        }
+        // 70% of linear scaling: memory bandwidth and the other pipeline
+        // stages share the cores. ~2 GiB/s is what the GPU path delivers end
+        // to end in a fresh process (CUDA start-up, transfers, writing).
+        const double cpuRate = double(sampleSize) / seconds * m_pool.size() * 0.7;
+        constexpr double kGpuRate = 2.0 * double(1u << 30);
+        if (std::getenv("VYRA_PROFILE"))
+            std::fprintf(stderr, "[auto] CPU estimate %.2f GiB/s (%d threads) vs GPU %.2f GiB/s\n", cpuRate / double(1u << 30),
+                         m_pool.size(), kGpuRate / double(1u << 30));
+        return cpuRate < kGpuRate;
+    }
+
+    // Waits for the backend chosen by startBackend (or falls back to the CPU)
+    // and lets it prepare for the job.
+    void attachBackend()
+    {
+        const Method method = m_options.method;
+        if (m_gpuInit.valid()) {
+            auto started = m_gpuInit.get();
+            if (started.first && started.first->canCompress(method)) m_backend = std::move(started.first);
+            else if (m_options.backend == BackendKind::Gpu) throw Error("GPU backend unavailable: " + started.second);
+        }
+        if (!m_backend) m_backend = createCpuBackend(m_pool);
+        profileMark("backend ready");
         if (method != Method::Store) {
-            // nvCOMP's high-ratio Deflate modes are much slower than zlib-ng on
-            // a multi-core CPU, so Auto keeps those levels on the CPU.
-            const BackendKind kind = m_options.backend == BackendKind::Auto && method == Method::Deflate && m_options.level >= 3
-                ? BackendKind::Cpu : m_options.backend;
-            m_backend = selectBackend(kind, m_pool, m_options.gpuDevice);
-            if (!m_backend->canCompress(method)) m_backend = createCpuBackend(m_pool);
-        } else {
-            m_backend = createCpuBackend(m_pool);
+            try {
+                m_outputBound = m_backend->prepareCompress(method, m_options.level, m_chunkSize, m_batchSize);
+            } catch (const Error &) {
+                // The GPU cannot hold this job (device memory): Auto continues on the CPU.
+                if (m_options.backend != BackendKind::Auto || !m_backend->info().gpu) throw;
+                m_backend = createCpuBackend(m_pool);
+                m_outputBound = 0;
+            }
         }
-        // One codec worker per backend. (Two CUDA streams were tried: on WDDM
-        // they contend inside the GPU and lose throughput.) Post-processing
-        // runs in its own stage so the GPU never waits for the CPU.
-        m_codecs = {m_backend.get()};
-        const std::string engine = method == Method::Store ? "Store (no compression)" : m_backend->info().name;
-        {
-            std::lock_guard<std::mutex> lock(m_state.mutex);
-            m_state.backend = engine;
-        }
+        profileMark("prepared");
+        // As many codec workers as the backend takes calls at once: the GPU
+        // backend overlaps one batch's upload with another's compression and
+        // a third one's download. Post-processing (only needed when the
+        // backend cannot frame on the device) runs in its own stage.
+        m_codecs.assign(std::size_t(std::max(1, m_backend->concurrency())), m_backend.get());
+        std::string engine = method == Method::Store ? "Store (no compression)" : m_backend->info().name;
+        if (m_hybrid && m_backend->info().gpu) engine += m_hybrid == 1 ? " (CPU during start-up)" : " + CPU";
+        std::lock_guard<std::mutex> lock(m_state.mutex);
+        m_state.backend = engine;
+    }
+
+    void prepareLayout()
+    {
+        const Method method = m_options.method;
         m_chunkSize = std::clamp<std::size_t>(m_options.chunkSize, 4096, method == Method::Deflate ? 65536 : (4u << 20));
         m_chunkSize &= ~std::size_t(255);
-        std::size_t batch = std::max<std::size_t>(m_options.batchSize, 4 * m_chunkSize);
-        // Never stage more than the input needs (small jobs stay small).
-        batch = std::size_t(std::min<std::uint64_t>(batch, m_state.bytesTotal + m_items.size() * 512 + 65536));
-        m_batchSize = std::max<std::size_t>(batch, 1 << 16);
+        sizeBatches();
 
         // Assign streams: one per non-empty file (zip) or solid folders (7z).
         int stream = -1;
@@ -415,6 +605,26 @@ private:
             m_folders.back().unpackSize += item.size;
             ++m_folders.back().streamCount;
         }
+    }
+
+    static int hybridMode()
+    {
+        if (const char *e = std::getenv("VYRA_HYBRID")) return std::clamp(std::atoi(e), 0, 3);
+        return 2;
+    }
+
+    void sizeBatches()
+    {
+        // GPUs want big batches (fewer, larger transfers and launches); the CPU
+        // is fastest when a batch stays close to its caches.
+        // 64 MiB keeps the pinned memory small (it is slow to set up and to
+        // release), and with four batches in flight the GPU still overlaps
+        // transfers and compression.
+        const std::size_t automatic = m_wantGpu ? (std::size_t(64) << 20) : (std::size_t(32) << 20);
+        std::size_t batch = std::max<std::size_t>(m_options.batchSize ? m_options.batchSize : automatic, 4 * m_chunkSize);
+        // Never stage more than the input needs (small jobs stay small).
+        batch = std::size_t(std::min<std::uint64_t>(batch, m_state.bytesTotal + m_items.size() * 512 + 65536));
+        m_batchSize = std::max<std::size_t>(batch, 1 << 16);
     }
 
     int levelFor7z(Method method) const
@@ -442,32 +652,85 @@ private:
     {
         // Input buffers are recycled as soon as a batch is encoded; batch
         // objects (holding the encoded output) once the writer is done.
-        const int kBuffers = int(m_codecs.size()) + 3, kBatches = kBuffers + 1;
-        m_buffers.resize(kBuffers);
+        // Inputs go back to the reader as soon as they are uploaded (GPU) or
+        // encoded; outputs grow to what the data needs. Pinned memory is
+        // expensive to set up and tear down, so keep both pools small.
+        // CPU jobs mostly map the input (no buffer memory is touched then), so
+        // more batches can be in flight than buffers would allow.
+        // Batches finish out of order and are written in order, so extra batch
+        // objects keep a slow batch from stalling the reader.
+        const int kBuffers = m_wantGpu ? 6 : 8, kBatches = 2 * kBuffers;
+        // Read-ahead allowance while the GPU starts (about 1.5 GiB).
+        m_maxInputs = m_wantGpu ? std::max<std::size_t>(kBuffers, (std::size_t(1536) << 20) / m_batchSize) : std::size_t(kBuffers);
+        m_growInputs = m_wantGpu;
+        m_mapInputs = !m_wantGpu;
         for (int i = 0; i < kBuffers; ++i) {
-            m_buffers[i].reset(*m_backend, m_batchSize);
+            m_inputs.push_back(std::make_unique<InputBuffer>(m_batchSize));
             m_freeBuffers.push(i);
         }
-        for (int i = 0; i < kBatches; ++i) {
-            auto b = std::make_unique<Batch>();
-            b->output.data.setAllocator(m_backend.get());
-            m_freeBatches.push(std::move(b));
-        }
+        for (int i = 0; i < kBatches; ++i) m_freeBatches.push(std::make_unique<Batch>());
+        // Reading starts right away, while the backend may still be starting.
+        std::vector<std::thread> unmappers;
+        for (int k = 0; k < 1; ++k)
+            unmappers.emplace_back([this] {
+                while (auto view = m_unmapQueue.pop()) unmapFileView(*view);
+            });
         std::thread reader([this] {
+            raiseThreadPriority();
             try { readerLoop(); } catch (...) { fail(std::current_exception()); }
             m_readQueue.close();
         });
-        // Two codec workers, each with its own GPU stream and device buffers,
-        // so one batch uploads/downloads while the other is being compressed.
-        // The writer restores the order.
-        std::atomic<int> codecsRunning{int(m_codecs.size())};
+        // Codec workers take batches from the read queue and finish out of
+        // order (the writer restores it). With a GPU, a CPU worker starts at
+        // once (hybrid): CUDA start-up takes about half a second, and the
+        // CPU compresses meanwhile. GPU workers join once the backend is up.
+        std::atomic<int> codecsRunning{1}; // the starter keeps the post queue open
         std::vector<std::thread> codecs;
-        for (std::size_t k = 0; k < m_codecs.size(); ++k) {
-            codecs.emplace_back([this, k, &codecsRunning] {
-                try { codecLoop(*m_codecs[k]); } catch (...) { fail(std::current_exception()); }
-                if (--codecsRunning == 0) m_postQueue.close();
-            });
+        auto finishCodec = [this, &codecsRunning] {
+            if (--codecsRunning == 0) m_postQueue.close();
+        };
+        auto runCodec = [this, finishCodec](Backend *backend) {
+            try { codecLoop(*backend); } catch (...) { fail(std::current_exception()); }
+            finishCodec();
+        };
+        m_hybrid = m_wantGpu ? hybridMode() : 0;
+        if (m_hybrid) {
+            m_cpuBackend = createCpuBackend(m_pool);
+            ++codecsRunning;
+            codecs.emplace_back(runCodec, m_cpuBackend.get());
         }
+        std::mutex codecsMutex;
+        std::thread starter([&] {
+            try {
+                attachBackend();
+                {
+                    std::lock_guard<std::mutex> lock(m_inputsMutex);
+                    m_growInputs = false;
+                    if (std::getenv("VYRA_PROFILE")) std::fprintf(stderr, "[profile] %zu input buffers at backend start\n", m_inputs.size());
+                }
+                // Input buffers are page-locked by the reader just before it
+                // fills one (never while a read may be writing into it).
+                if (m_backend->info().gpu) m_registerWith = m_backend.get();
+                // Outputs of GPU batches start at half a batch (typical
+                // compressed data fits); incompressible data grows them once.
+                // Page-locked memory costs time to set up and to release.
+                m_initialOutput = m_outputBound ? std::min(m_outputBound, m_batchSize / 2 + (std::size_t(1) << 20)) : 0;
+                profileMark("host buffers ready");
+                const bool gpu = m_backend->info().gpu;
+                if (gpu || !m_hybrid) {
+                    std::lock_guard<std::mutex> lock(codecsMutex);
+                    m_gpuStarted = gpu;
+                    for (Backend *b : m_codecs) {
+                        ++codecsRunning;
+                        codecs.emplace_back(runCodec, b);
+                    }
+                }
+            } catch (...) {
+                fail(std::current_exception());
+            }
+            m_starterDone = true;
+            finishCodec();
+        });
         std::thread post([this] {
             try { postLoop(); } catch (...) { fail(std::current_exception()); }
             m_writeQueue.close();
@@ -478,11 +741,14 @@ private:
             fail(std::current_exception());
         }
         reader.join();
+        starter.join();
         for (auto &t : codecs) t.join();
         post.join();
+        m_unmapQueue.close();
+        for (auto &t : unmappers) t.join();
         m_freeBatches.close();
         while (m_freeBatches.pop()) {}
-        m_buffers.clear();
+        m_inputs.clear();
         if (std::getenv("VYRA_PROFILE")) {
             std::fprintf(stderr, "[profile] read %.2fs (wait buf %.2fs) | crc %.2fs compress %.2fs post %.2fs (wait input %.2fs) | write %.2fs (wait %.2fs)\n",
                          m_tRead.seconds(), m_tReadWait.seconds(), m_tCrc.seconds(), m_tCompress.seconds(), m_tPost.seconds(),
@@ -495,13 +761,30 @@ private:
     std::unique_ptr<Batch> newBatch()
     {
         StageTimer::Scope timing{m_tReadWait};
-        auto index = m_freeBuffers.pop();
+        auto index = m_freeBuffers.tryPop();
+        if (!index) {
+            // While the GPU is still starting up, keep reading ahead into
+            // extra buffers instead of waiting (they are registered with the
+            // backend once it is ready).
+            std::lock_guard<std::mutex> lock(m_inputsMutex);
+            if (m_growInputs && m_inputs.size() < m_maxInputs) {
+                m_inputs.push_back(std::make_unique<InputBuffer>(m_batchSize));
+                index = int(m_inputs.size() - 1);
+                m_freeBatches.push(std::make_unique<Batch>());
+            }
+        }
+        if (!index) index = m_freeBuffers.pop();
         if (!index) throw Cancelled();
         auto pooled = m_freeBatches.pop();
         if (!pooled) throw Cancelled();
         auto b = std::move(*pooled);
         b->buffer = *index;
-        b->data = m_buffers[std::size_t(*index)].data();
+        {
+            std::lock_guard<std::mutex> lock(m_inputsMutex);
+            InputBuffer &input = *m_inputs[std::size_t(*index)];
+            if (Backend *gpu = m_registerWith.load()) input.registerWith(*gpu);
+            b->data = input.data();
+        }
         return b;
     }
 
@@ -529,7 +812,9 @@ private:
             }
         };
         auto submit = [&] {
+            if (m_timeline) batch->stamps[0] = processUptime();
             executeReads(*batch);
+            if (m_timeline) batch->stamps[1] = processUptime();
             if (!m_readQueue.push(std::move(batch))) throw Cancelled();
             batch = newBatch();
             batch->sequence = ++sequence;
@@ -581,9 +866,48 @@ private:
         if (!m_readQueue.push(std::move(batch))) throw Cancelled();
     }
 
+    // A batch that is one contiguous range of one file can use the file
+    // cache pages directly (CPU jobs): no copy, which is most of the reading
+    // cost on a machine short of memory bandwidth.
+    bool mapBatch(Batch &b)
+    {
+        if (!m_mapInputs || b.reads.empty() || b.reads.front().bufferOffset != 0) return false;
+        // Only a share of the batches: mapping and unmapping serialise on the
+        // process's page tables, copies on the file cache; mixing both reads
+        // faster than either alone. Copy while the unmap thread is behind, so
+        // its backlog (waited for at the end of the job) stays small.
+        if (m_unmapQueue.size() >= 3) return false;
+        m_mapCredit += m_mapShare;
+        if (m_mapCredit < 100) return false;
+        m_mapCredit -= 100;
+        const ReadTask &first = b.reads.front();
+        std::uint64_t fileEnd = first.fileOffset;
+        std::size_t bufferEnd = 0;
+        for (const ReadTask &t : b.reads) {
+            if (t.item != first.item || t.fileOffset != fileEnd || t.bufferOffset != bufferEnd) return false;
+            fileEnd += t.size;
+            bufferEnd += t.size;
+        }
+        if (bufferEnd != b.used || bufferEnd < (std::size_t(4) << 20)) return false;
+        FileView view = mapFileRange(m_items[first.item].source, first.fileOffset, bufferEnd);
+        if (!view) return false;
+        b.view = view;
+        b.data = const_cast<std::uint8_t *>(view.data); // read-only use
+        // Map the pages here, on the I/O threads (one read per page), so the
+        // compression threads do not take a soft fault per page later.
+        const std::size_t pages = (bufferEnd + 4095) / 4096, parts = 16;
+        m_ioPool.parallelFor(parts, [&](std::size_t part) {
+            volatile std::uint8_t sink = 0;
+            for (std::size_t p = pages * part / parts; p < pages * (part + 1) / parts; ++p) sink = sink + view.data[p * 4096];
+            (void)sink;
+        });
+        return true;
+    }
+
     void executeReads(Batch &b)
     {
         StageTimer::Scope timing{m_tRead};
+        if (mapBatch(b)) return;
         m_ioPool.parallelFor(b.reads.size(), [&](std::size_t k) {
             m_state.checkCancel();
             const ReadTask &t = b.reads[k];
@@ -593,10 +917,54 @@ private:
         });
     }
 
+    void releaseInput(Batch &b)
+    {
+        // Unmapping a view costs ~10 ms per 32 MiB (page tables, TLB
+        // shootdowns); a background thread does it so no stage waits.
+        if (b.view) {
+            m_unmapQueue.push(b.view);
+            b.view = FileView{};
+        }
+        if (b.buffer >= 0) m_freeBuffers.push(b.buffer);
+        b.buffer = -1;
+        b.data = nullptr;
+    }
+
+    // GPU path: compression, container framing and CRCs in one device pass.
+    bool compressOnDevice(Backend &backend, Batch &b, CrcPieces &crc)
+    {
+        planCrcPieces(b, crc);
+        CompressExtras extras;
+        extras.inputReleased = [&] { releaseInput(b); };
+        extras.streamStart = &b.streamStart;
+        extras.streamEnd = &b.streamEnd;
+        extras.lz4BlockMaximum = lz4BlockMaximum(m_chunkSize);
+        extras.crcRanges = &crc.ranges;
+        extras.crcs = &crc.crcs;
+        {
+            StageTimer::Scope timing{m_tCompress};
+            if (!backend.compressFramed(m_options.method, m_options.level, b.data, b.chunks, extras, b.output)) return false;
+        }
+        b.framed = true;
+        if (crc.crcs.size() != crc.ranges.size()) {
+            StageTimer::Scope timing{m_tCrc};
+            computeSegmentCrcs(b, m_pool);
+        } else {
+            combineCrcPieces(b, crc);
+        }
+        return true;
+    }
+
     void codecLoop(Backend &backend)
     {
         const Method method = m_options.method;
+        const bool gpu = backend.info().gpu;
+        CrcPieces crcPieces;
         for (;;) {
+            // Hybrid mode 1: the CPU only bridges the GPU start-up. Mode 3
+            // (tests): the CPU starts with the GPU, so their batches mix.
+            if (!gpu && m_hybrid == 1 && m_gpuStarted) break;
+            while (!gpu && m_hybrid == 3 && !m_starterDone && !m_state.cancel) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             std::optional<std::unique_ptr<Batch>> next;
             {
                 StageTimer::Scope timing{m_tCodecWait};
@@ -604,6 +972,19 @@ private:
             }
             if (!next) break;
             Batch &b = **next;
+            if (m_timeline) b.stamps[2] = processUptime();
+            if (gpu) {
+                // GPU batches need page-locked outputs from the GPU backend.
+                if (b.output.data.allocator() != &backend) {
+                    b.output.data.rebind(&backend);
+                    if (m_initialOutput) {
+                        b.output.data.resize(m_initialOutput);
+                        b.output.data.clear();
+                    }
+                }
+            } else if (b.output.data.capacity() == 0) {
+                b.output.data.setAllocator(&backend);
+            }
             if (method == Method::Store) {
                 computeSegmentCrcs(b, m_pool);
                 b.output.offsets.assign(b.chunks.size() + 1, 0);
@@ -612,7 +993,11 @@ private:
                 m_pool.parallelFor(b.chunks.size(), [&](std::size_t i) {
                     std::memcpy(b.output.data.data() + b.output.offsets[i], b.data + b.chunks[i].offset, b.chunks[i].size);
                 });
-            } else if (backend.info().gpu) {
+            } else if (gpu && compressOnDevice(backend, b, crcPieces)) {
+                // Framed (and usually CRC'd) on the GPU: the input buffer goes
+                // back to the reader (if the backend did not release it yet).
+                releaseInput(b);
+            } else if (gpu) {
                 // CRCs run on the CPU while the GPU compresses.
                 std::exception_ptr crcError;
                 std::thread crc([&] {
@@ -629,14 +1014,24 @@ private:
                 crc.join();
                 if (crcError) std::rethrow_exception(crcError);
             } else {
+                // CPU: CRCs fused with compression, chunk by chunk; LZ4 also
+                // framed in place.
+                planChunkCrcPieces(b, crcPieces);
                 {
-                    StageTimer::Scope timing{m_tCrc};
-                    computeSegmentCrcs(b, m_pool);
+                    StageTimer::Scope timing{m_tCompress};
+                    CompressExtras extras;
+                    extras.streamStart = &b.streamStart;
+                    extras.streamEnd = &b.streamEnd;
+                    extras.lz4BlockMaximum = lz4BlockMaximum(m_chunkSize);
+                    extras.crcRanges = &crcPieces.ranges;
+                    extras.crcs = &crcPieces.crcs;
+                    if (backend.compressFramed(method, m_options.level, b.data, b.chunks, extras, b.output)) b.framed = true;
+                    else backend.compressChecked(method, m_options.level, b.data, b.chunks, crcPieces.ranges, crcPieces.crcs, b.output);
                 }
-                StageTimer::Scope timing{m_tCompress};
-                backend.compress(method, m_options.level, b.data, b.chunks, b.output);
+                combineCrcPieces(b, crcPieces);
             }
             b.shape = backend.deflateShape();
+            if (m_timeline) b.stamps[3] = processUptime();
             if (!m_postQueue.push(std::move(*next))) throw Cancelled();
         }
     }
@@ -648,13 +1043,13 @@ private:
         const Method method = m_options.method;
         while (auto next = m_postQueue.pop()) {
             Batch &b = **next;
-            {
+            if (!b.framed) {
                 StageTimer::Scope postTiming{m_tPost};
                 if (method == Method::Deflate) joinDeflateChunks(b.output, b.streamEnd, b.shape, m_pool, m_scratch);
                 if (method == Method::LZ4) frameLz4(b, lz4BlockMaximum(m_chunkSize), m_pool, m_scratch);
             }
-            m_freeBuffers.push(b.buffer);
-            b.data = nullptr;
+            releaseInput(b);
+            if (m_timeline) b.stamps[4] = processUptime();
             if (!m_writeQueue.push(std::move(*next))) throw Cancelled();
         }
     }
@@ -712,10 +1107,10 @@ private:
                         zip->beginEntry({item.name, false, m_options.method, item.size, item.mtime, item.attributes});
                         entryCrc = 0;
                     }
-                    while (c < b.chunks.size() && b.chunks[c].offset < seg.offset + seg.size) {
-                        zip->writeData(b.output.chunk(c), b.output.chunkSize(c));
-                        ++c;
-                    }
+                    // Compressed chunks are contiguous: one write per run.
+                    const std::size_t from = c;
+                    while (c < b.chunks.size() && b.chunks[c].offset < seg.offset + seg.size) ++c;
+                    writeChunks(b.output, from, c, [&](const std::uint8_t *p, std::size_t n) { zip->writeData(p, n); });
                     entryCrc = crc32Combine(entryCrc, b.segmentCrc[s], seg.size);
                     if (seg.last) {
                         zip->endEntry(entryCrc);
@@ -729,14 +1124,19 @@ private:
                 m_state.outputBytes = m_out.tell();
             }
             if (zip) {
-                for (; c < b.chunks.size(); ++c) zip->writeData(b.output.chunk(c), b.output.chunkSize(c));
+                writeChunks(b.output, c, b.chunks.size(), [&](const std::uint8_t *p, std::size_t n) { zip->writeData(p, n); });
             } else {
-                for (std::size_t i = 0; i < b.chunks.size(); ++i) {
-                    m_out.write(b.output.chunk(i), b.output.chunkSize(i));
-                    m_folders[b.chunkStream[i]].packSize += b.output.chunkSize(i);
-                }
+                // 7z packed streams follow each other: the whole batch output
+                // goes out in one write.
+                for (std::size_t i = 0; i < b.chunks.size(); ++i) m_folders[b.chunkStream[i]].packSize += b.output.chunkSize(i);
+                writeChunks(b.output, 0, b.chunks.size(), [&](const std::uint8_t *p, std::size_t n) { m_out.write(p, n); });
             }
             m_state.outputBytes = m_out.tell();
+            if (m_timeline) {
+                const double *t = b.stamps;
+                std::fprintf(stderr, "[batch] %3llu plan %7.3f read %7.3f codec %7.3f..%7.3f post %7.3f written %7.3f\n",
+                             static_cast<unsigned long long>(b.sequence), t[0], t[1], t[2], t[3], t[4], processUptime());
+            }
             (*next)->reset();
             m_freeBatches.push(std::move(*next));
             m_state.checkCancel();
@@ -774,16 +1174,37 @@ private:
     std::vector<SevenZFolderInfo> m_folders;
     std::size_t m_chunkSize = 65536;
     std::size_t m_batchSize = 0;
+    std::size_t m_outputBound = 0; // per batch, from Backend::prepareCompress
     OutFile m_out;
-    std::vector<HostBuffer> m_buffers;
-    ThreadPool m_ioPool{std::min(8, defaultThreadCount())};
+    std::vector<std::unique_ptr<InputBuffer>> m_inputs;
+    std::unique_ptr<Backend> m_cpuBackend; // hybrid mode
+    int m_hybrid = 0; // 0 off, 1 CPU until the GPU is up, 2 CPU and GPU together, 3 like 2 but the CPU waits for the GPU (tests)
+    std::atomic<bool> m_gpuStarted{false};
+    std::atomic<bool> m_starterDone{false};
+    bool m_timeline = std::getenv("VYRA_PROFILE") && std::string(std::getenv("VYRA_PROFILE")) == "2";
+    std::mutex m_inputsMutex;
+    bool m_growInputs = false;
+    std::size_t m_maxInputs = 0;
+    std::atomic<Backend *> m_registerWith{nullptr}; // set once the GPU backend is up
+    bool m_mapInputs = false;
+    int m_mapShare = 60; // percent of eligible batches that are mapped (measured best 50-67)
+    int m_mapCredit = 0;
+    std::future<std::pair<std::unique_ptr<Backend>, std::string>> m_gpuInit;
+    bool m_wantGpu = false;
+    std::size_t m_initialOutput = 0;
+    // Reads are usually the bottleneck: their threads (and the reader) run
+    // above compression, which takes whatever CPU time is left.
+    ThreadPool m_ioPool{ioThreadCount(), true};
     std::vector<Backend *> m_codecs;
     ChunkOutput m_scratch;
-    BlockingQueue<int> m_freeBuffers{8};
-    BlockingQueue<std::unique_ptr<Batch>> m_freeBatches{16};
-    BlockingQueue<std::unique_ptr<Batch>> m_readQueue{2};
-    BlockingQueue<std::unique_ptr<Batch>> m_postQueue{2};
-    BlockingQueue<std::unique_ptr<Batch>> m_writeQueue{2};
+    // Pools: bounded by the objects they hold, not by the queue.
+    BlockingQueue<int> m_freeBuffers{64};
+    BlockingQueue<std::unique_ptr<Batch>> m_freeBatches{64};
+    BlockingQueue<std::unique_ptr<Batch>> m_readQueue{64}; // read-ahead is bounded by the input buffers
+    BlockingQueue<FileView> m_unmapQueue{1024};
+    // Several codec workers finish in bursts; the batch pool bounds these.
+    BlockingQueue<std::unique_ptr<Batch>> m_postQueue{64};
+    BlockingQueue<std::unique_ptr<Batch>> m_writeQueue{64};
     std::mutex m_errorMutex;
     std::exception_ptr m_error;
     StageTimer m_tRead, m_tReadWait, m_tCrc, m_tCompress, m_tPost, m_tCodecWait, m_tWrite, m_tWriteWait;

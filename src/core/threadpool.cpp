@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <exception>
 #include <memory>
 
@@ -13,10 +16,21 @@ int defaultThreadCount()
     return n ? int(std::min(n, 64u)) : 4;
 }
 
-ThreadPool::ThreadPool(int threads)
+void raiseThreadPriority()
+{
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
+}
+
+ThreadPool::ThreadPool(int threads, bool aboveNormal)
 {
     if (threads <= 0) threads = defaultThreadCount();
-    for (int i = 1; i < threads; ++i) m_workers.emplace_back([this] { workerLoop(); });
+    for (int i = 1; i < threads; ++i)
+        m_workers.emplace_back([this, aboveNormal] {
+            if (aboveNormal) raiseThreadPriority();
+            workerLoop();
+        });
 }
 
 ThreadPool::~ThreadPool()
